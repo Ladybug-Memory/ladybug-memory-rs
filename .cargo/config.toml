@@ -1,0 +1,19 @@
+# Machine-local build config (not portable — see README).
+#
+# Shared (dylib) linking against the prebuilt liblbug 0.21.2: this is the
+# configuration extensions (FTS, vector, …) are built for. Static linking
+# dead-strips the GDS/table-function symbols extensions resolve from the
+# host, so dlopen fails with missing-symbol errors.
+#
+# LBUG_LIBRARY_DIR / LBUG_INCLUDE_DIR point at a persistent copy of the
+# release archive (keep in sync with the `lbug` crate version on bump);
+# LBUG_SHARED selects dylib (not static) linking. Binaries find the dylib
+# at runtime via the absolute rpath below (the crate's own rpath hint does
+# not propagate to final links, so it is repeated here).
+[env]
+LBUG_SHARED = "1"
+LBUG_LIBRARY_DIR = "/Users/arun/.cache/lbug-shared-0.21.2/lib"
+LBUG_INCLUDE_DIR = "/Users/arun/.cache/lbug-shared-0.21.2/lib"
+
+[build]
+rustflags = ["-C", "link-args=-Wl,-rpath,/Users/arun/.cache/lbug-shared-0.21.2/lib"]

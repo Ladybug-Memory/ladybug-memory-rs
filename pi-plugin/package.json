@@ -1,0 +1,15 @@
+{
+	"name": "pi-extension-lb-memory",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Long-term memory for pi backed by LadybugDB via the lbm binary (GLiNER2.5 entity graph over distilled facts)",
+	"scripts": {
+		"check": "echo 'no build step (spawns lbm)'"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	}
+}

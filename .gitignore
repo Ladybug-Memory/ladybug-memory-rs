@@ -1,0 +1,22 @@
+# Build output (gigabytes with static deps — never commit)
+/target/
+
+# LadybugDB databases are user data, not source
+*.lbdb
+*.lbdb.wal
+
+# macOS noise
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
+*~
+
+# Profiling / coverage
+perf.data
+perf.data.old
+lcov.info

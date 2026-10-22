@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/gliner-onnx", "crates/lb-memory", "crates/lbm"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"

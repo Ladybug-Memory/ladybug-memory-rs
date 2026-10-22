@@ -1,0 +1,435 @@
+{
+  "labels": [
+    "person",
+    "organization",
+    "location",
+    "product",
+    "event",
+    "date",
+    "technology",
+    "concept"
+  ],
+  "threshold": 0.5,
+  "cases": {
+    "apple_news": {
+      "text": "Apple Inc. announced today that Tim Cook will be presenting at their headquarters in Cupertino, California. The event is scheduled for March 15, 2024. Microsoft and Google are also expected to make announcements during the same week.",
+      "normalized": "Apple Inc. announced today that Tim Cook will be presenting at their headquarters in Cupertino, California. The event is scheduled for March 15, 2024. Microsoft and Google are also expected to make announcements during the same week.",
+      "input_ids": [
+        287,
+        128003,
+        6967,
+        287,
+        128005,
+        604,
+        128005,
+        1416,
+        128005,
+        1250,
+        128005,
+        714,
+        128005,
+        720,
+        128005,
+        1043,
+        128005,
+        835,
+        128005,
+        2133,
+        1263,
+        1263,
+        128002,
+        6038,
+        25875,
+        323,
+        1577,
+        561,
+        272,
+        41718,
+        3712,
+        296,
+        282,
+        7154,
+        288,
+        308,
+        7020,
+        267,
+        3189,
+        649,
+        41290,
+        366,
+        28225,
+        323,
+        262,
+        720,
+        269,
+        3170,
+        270,
+        9409,
+        706,
+        366,
+        29811,
+        323,
+        28190,
+        263,
+        7374,
+        281,
+        327,
+        1256,
+        264,
+        365,
+        13040,
+        482,
+        262,
+        454,
+        542,
+        323
+      ],
+      "word_first_positions": [
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67
+      ],
+      "query_positions": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16,
+        18
+      ],
+      "entities": {
+        "person": {
+          "null_prob": 0.013955054240320975,
+          "abstained": false,
+          "raw_hits": 1,
+          "mentions": [
+            {
+              "text": "Tim Cook",
+              "confidence": 0.9934272905522921,
+              "start": 32,
+              "end": 40,
+              "word_start": 6,
+              "word_end": 8
+            }
+          ]
+        },
+        "organization": {
+          "null_prob": 0.0034864082085310885,
+          "abstained": false,
+          "raw_hits": 3,
+          "mentions": [
+            {
+              "text": "Apple Inc.",
+              "confidence": 0.997650090687848,
+              "start": 0,
+              "end": 10,
+              "word_start": 0,
+              "word_end": 3
+            },
+            {
+              "text": "Microsoft",
+              "confidence": 0.9960331542542824,
+              "start": 151,
+              "end": 160,
+              "word_start": 29,
+              "word_end": 30
+            },
+            {
+              "text": "Google",
+              "confidence": 0.9953922390337916,
+              "start": 165,
+              "end": 171,
+              "word_start": 31,
+              "word_end": 32
+            }
+          ]
+        },
+        "location": {
+          "null_prob": 0.024000333785144542,
+          "abstained": false,
+          "raw_hits": 2,
+          "mentions": [
+            {
+              "text": "Cupertino",
+              "confidence": 0.973361406323163,
+              "start": 85,
+              "end": 94,
+              "word_start": 15,
+              "word_end": 16
+            },
+            {
+              "text": "California",
+              "confidence": 0.9193461018969331,
+              "start": 96,
+              "end": 106,
+              "word_start": 17,
+              "word_end": 18
+            }
+          ]
+        },
+        "product": {
+          "null_prob": 0.8166496848690461,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "event": {
+          "null_prob": 0.8337928782105906,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "date": {
+          "null_prob": 0.028391927523461383,
+          "abstained": false,
+          "raw_hits": 1,
+          "mentions": [
+            {
+              "text": "March 15, 2024",
+              "confidence": 0.9925303471662148,
+              "start": 135,
+              "end": 149,
+              "word_start": 24,
+              "word_end": 28
+            }
+          ]
+        },
+        "technology": {
+          "null_prob": 0.994732041141994,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "concept": {
+          "null_prob": 0.9940153003419854,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        }
+      }
+    },
+    "elon": {
+      "text": "Elon Musk founded SpaceX in 2002 and Tesla's headquarters are in Austin, Texas.",
+      "normalized": "Elon Musk founded SpaceX in 2002 and Tesla's headquarters are in Austin, Texas.",
+      "input_ids": [
+        287,
+        128003,
+        6967,
+        287,
+        128005,
+        604,
+        128005,
+        1416,
+        128005,
+        1250,
+        128005,
+        714,
+        128005,
+        720,
+        128005,
+        1043,
+        128005,
+        835,
+        128005,
+        2133,
+        1263,
+        1263,
+        128002,
+        5173,
+        935,
+        41851,
+        3679,
+        754,
+        982,
+        267,
+        3339,
+        263,
+        9049,
+        268,
+        3427,
+        382,
+        1550,
+        7020,
+        281,
+        267,
+        62633,
+        366,
+        22692,
+        323
+      ],
+      "word_first_positions": [
+        23,
+        25,
+        26,
+        27,
+        29,
+        30,
+        31,
+        32,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43
+      ],
+      "query_positions": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16,
+        18
+      ],
+      "entities": {
+        "person": {
+          "null_prob": 0.010600548313415229,
+          "abstained": false,
+          "raw_hits": 1,
+          "mentions": [
+            {
+              "text": "Elon Musk",
+              "confidence": 0.9980825182269533,
+              "start": 0,
+              "end": 9,
+              "word_start": 0,
+              "word_end": 2
+            }
+          ]
+        },
+        "organization": {
+          "null_prob": 0.004609703454238092,
+          "abstained": false,
+          "raw_hits": 2,
+          "mentions": [
+            {
+              "text": "Tesla",
+              "confidence": 0.9964321279924225,
+              "start": 37,
+              "end": 42,
+              "word_start": 7,
+              "word_end": 8
+            },
+            {
+              "text": "SpaceX",
+              "confidence": 0.9962865019506797,
+              "start": 18,
+              "end": 24,
+              "word_start": 3,
+              "word_end": 4
+            }
+          ]
+        },
+        "location": {
+          "null_prob": 0.015796373549785976,
+          "abstained": false,
+          "raw_hits": 2,
+          "mentions": [
+            {
+              "text": "Austin",
+              "confidence": 0.9683930933120132,
+              "start": 65,
+              "end": 71,
+              "word_start": 13,
+              "word_end": 14
+            },
+            {
+              "text": "Texas",
+              "confidence": 0.8398321282440265,
+              "start": 73,
+              "end": 78,
+              "word_start": 15,
+              "word_end": 16
+            }
+          ]
+        },
+        "product": {
+          "null_prob": 0.9135314493628823,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "event": {
+          "null_prob": 0.9938765251724043,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "date": {
+          "null_prob": 0.08283245553127237,
+          "abstained": false,
+          "raw_hits": 1,
+          "mentions": [
+            {
+              "text": "2002",
+              "confidence": 0.9731190153896812,
+              "start": 28,
+              "end": 32,
+              "word_start": 5,
+              "word_end": 6
+            }
+          ]
+        },
+        "technology": {
+          "null_prob": 0.9963694869541745,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        },
+        "concept": {
+          "null_prob": 0.9959245124018159,
+          "abstained": true,
+          "raw_hits": 0,
+          "mentions": []
+        }
+      }
+    }
+  }
+}

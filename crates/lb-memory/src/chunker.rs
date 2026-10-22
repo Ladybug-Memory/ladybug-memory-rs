@@ -1,0 +1,192 @@
+//! Logical chunking (H-GLUE style): paragraph / sentence-group boundaries,
+//! never fixed windows. Chunks are ephemeral — they scope extraction spans,
+//! they are not stored (no session duplication).
+
+/// One semantically coherent unit of text.
+#[derive(Debug, Clone)]
+pub struct LogicalUnit {
+    pub text: String,
+    pub unit_type: &'static str,
+    pub start: usize,
+    pub end: usize,
+}
+
+pub struct LogicalChunker {
+    pub min_unit_size: usize,
+    pub max_unit_size: usize,
+    pub merge_threshold: usize,
+}
+
+impl Default for LogicalChunker {
+    fn default() -> Self {
+        Self { min_unit_size: 100, max_unit_size: 2000, merge_threshold: 150 }
+    }
+}
+
+impl LogicalChunker {
+    pub fn chunk(&self, text: &str) -> Vec<LogicalUnit> {
+        let mut units: Vec<LogicalUnit> = Vec::new();
+        for (para, start, end) in split_paragraphs(text) {
+            if para.trim().len() < self.min_unit_size {
+                if let Some(last) = units.last_mut() {
+                    if last.text.len() + para.len() < self.max_unit_size {
+                        last.text.push_str("\n\n");
+                        last.text.push_str(&para);
+                        last.end = end;
+                        continue;
+                    }
+                }
+            }
+            if para.len() > self.max_unit_size {
+                units.extend(split_sentence_groups(&para, start, self.max_unit_size));
+            } else {
+                units.push(LogicalUnit { text: para, unit_type: "paragraph", start, end });
+            }
+        }
+        // Merge trailing tiny units into their predecessor.
+        let mut out: Vec<LogicalUnit> = Vec::with_capacity(units.len());
+        for unit in units {
+            if unit.text.len() < self.merge_threshold {
+                if let Some(last) = out.last_mut() {
+                    last.text.push_str("\n\n");
+                    last.text.push_str(&unit.text);
+                    last.end = unit.end;
+                    continue;
+                }
+            }
+            out.push(unit);
+        }
+        out
+    }
+}
+
+fn split_paragraphs(text: &str) -> Vec<(String, usize, usize)> {
+    let mut paras = Vec::new();
+    let mut last_end = 0usize;
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find("\n\n") {
+        let idx = search_from + rel;
+        let para = text[last_end..idx].trim().to_string();
+        if !para.is_empty() {
+            paras.push((para, last_end, idx));
+        }
+        // Skip the whole blank run.
+        let mut end = idx;
+        while text[end..].starts_with('\n') {
+            end += 1;
+        }
+        last_end = end;
+        search_from = end;
+    }
+    let tail = text[last_end..].trim().to_string();
+    if !tail.is_empty() {
+        paras.push((tail, last_end, text.len()));
+    }
+    paras
+}
+
+/// Split text into sentences, each with its char offset into `text`.
+/// A sentence ends at `.`/`!`/`?` followed by whitespace (or end of text).
+pub fn split_sentences(text: &str) -> Vec<(String, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '.' | '!' | '?') {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            // Sentence boundary only at whitespace/end (avoids "v1.2" splits).
+            if j > i + 1 || j == chars.len() {
+                let sent: String = chars[start..=i].iter().collect();
+                if !sent.trim().is_empty() {
+                    out.push((sent.trim().to_string(), start));
+                }
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if start < chars.len() {
+        let tail: String = chars[start..].iter().collect();
+        if !tail.trim().is_empty() {
+            out.push((tail.trim().to_string(), start));
+        }
+    }
+    out
+}
+
+fn split_sentence_groups(text: &str, base_offset: usize, max_unit_size: usize) -> Vec<LogicalUnit> {
+    let mut units = Vec::new();
+    let mut sentences: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if matches!(bytes[i], b'.' | b'!' | b'?') {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            sentences.push(text[start..i + 1].trim());
+            start = j;
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    if start < text.len() && !text[start..].trim().is_empty() {
+        sentences.push(text[start..].trim());
+    }
+
+    let mut current: Vec<&str> = Vec::new();
+    let mut current_start = base_offset;
+    let mut current_len = 0usize;
+    for sent in sentences {
+        if current_len + sent.len() > max_unit_size && !current.is_empty() {
+            let joined = current.join(" ");
+            let end = current_start + joined.len();
+            units.push(LogicalUnit { text: joined, unit_type: "sentence_group", start: current_start, end });
+            current_start = end + 1;
+            current.clear();
+            current_len = 0;
+        }
+        current.push(sent);
+        current_len += sent.len() + 1;
+    }
+    if !current.is_empty() {
+        let joined = current.join(" ");
+        let end = current_start + joined.len();
+        units.push(LogicalUnit { text: joined, unit_type: "sentence_group", start: current_start, end });
+    }
+    units
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_text_is_one_unit() {
+        let units = LogicalChunker::default().chunk("User prefers Python for scripting.");
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].unit_type, "paragraph");
+    }
+
+    #[test]
+    fn paragraphs_split_and_tiny_merges() {
+        let long_a = "First substantial paragraph ".repeat(10);
+        let long_b = "Second substantial paragraph ".repeat(10);
+        let tiny = "Hi.";
+        let text = format!("{long_a}\n\n{long_b}\n\n{tiny}");
+        let units = LogicalChunker::default().chunk(&text);
+        // Two long paragraphs stay separate; the tiny tail merges into the last.
+        assert_eq!(units.len(), 2);
+        assert!(units[1].text.ends_with("Hi."));
+    }
+}

@@ -1,0 +1,9 @@
+# Large binary artifacts this project deals with go to Git LFS
+# (matches the `filter.lfs` setup in ~/.gitconfig) if ever added.
+# Databases (*.lbdb) are gitignored — user data, not source.
+*.lbdb filter=lfs diff=lfs merge=lfs -text
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.onnx.data filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.a filter=lfs diff=lfs merge=lfs -text
