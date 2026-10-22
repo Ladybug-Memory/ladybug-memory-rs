@@ -60,6 +60,7 @@ fn remember_new_fact_writes_graph() {
     let pipe = Pipeline::new(&store, PipelineOptions::default());
     let mut ex = FakeExtractor {
         mentions: vec![mention("Tim Cook", "person", 0.99), mention("Apple", "organization", 0.98)],
+        classify_scores: vec![],
     };
     let reports = pipe.remember(&mut ex, "Tim Cook runs Apple.", &scope(), None, prov()).unwrap();
     assert_eq!(reports.len(), 1);
@@ -84,7 +85,7 @@ fn remember_new_fact_writes_graph() {
 fn duplicate_strengthens_instead_of_writing() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)] };
+    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![] };
     let first = pipe.remember(&mut ex, "User prefers Python for scripting.", &scope(), None, prov()).unwrap();
     assert!(matches!(first[0].decision, FactDecision::New { .. }));
     let id = first[0].written.as_ref().unwrap().id;
@@ -107,7 +108,7 @@ fn duplicate_strengthens_instead_of_writing() {
 fn conflict_goes_to_review_with_provenance() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)] };
+    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![] };
     pipe.remember(&mut ex, "User prefers Python for scripting.", &scope(), None, prov()).unwrap();
     let reports =
         pipe.remember(&mut ex, "User hates Python for scripting.", &scope(), None, prov()).unwrap();
@@ -138,7 +139,7 @@ fn conflict_goes_to_review_with_provenance() {
 fn low_confidence_is_quarantined_not_dropped() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![] };
+    let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![] };
     let reports = pipe.remember(&mut ex, "Hmm, vague rambling without names.", &scope(), None, prov()).unwrap();
     assert!(matches!(reports[0].decision, FactDecision::LowConfidence { .. }));
     assert_eq!(reports[0].written.as_ref().unwrap().status, MemoryStatus::Quarantined);
@@ -150,12 +151,63 @@ fn low_confidence_is_quarantined_not_dropped() {
 fn alias_surfaces_merge_onto_canonical() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("LadybugDB", "technology", 0.9)] };
+    let mut ex = FakeExtractor { mentions: vec![mention("LadybugDB", "technology", 0.9)], classify_scores: vec![] };
     pipe.remember(&mut ex, "LadybugDB is a graph database.", &scope(), None, prov()).unwrap();
-    let mut ex2 = FakeExtractor { mentions: vec![mention("ladybugdb", "technology", 0.88)] };
+    let mut ex2 = FakeExtractor { mentions: vec![mention("ladybugdb", "technology", 0.88)], classify_scores: vec![] };
     let reports = pipe.remember(&mut ex2, "ladybugdb stores the memory graph.", &scope(), None, prov()).unwrap();
     assert!(!reports[0].resolved[0].created, "alias must merge, not fork");
     let entities = store.list_entities().unwrap();
     assert_eq!(entities.len(), 1);
     assert!(entities[0].aliases.iter().any(|a| a == "ladybugdb"));
+}
+
+#[test]
+fn model_category_fills_rule_gap() {
+    // "Tim Cook runs Apple." has no rule cue (General); the fake model
+    // verdict promotes it, mirroring the ONNX parities (work=0.942).
+    let store = Store::ephemeral().unwrap();
+    let pipe = Pipeline::new(&store, PipelineOptions::default());
+    let mut ex = FakeExtractor {
+        mentions: vec![mention("Tim Cook", "person", 0.99)],
+        classify_scores: vec![("work".to_string(), 0.94), ("general".to_string(), 0.68)],
+    };
+    let reports = pipe.remember(&mut ex, "Tim Cook runs Apple.", &scope(), None, prov()).unwrap();
+    assert_eq!(
+        reports[0].written.as_ref().unwrap().category,
+        lb_memory::types::Category::Work
+    );
+}
+
+#[test]
+fn rules_win_over_model() {
+    // Explicit preference cue beats a model verdict.
+    let store = Store::ephemeral().unwrap();
+    let pipe = Pipeline::new(&store, PipelineOptions::default());
+    let mut ex = FakeExtractor {
+        mentions: vec![mention("Python", "technology", 0.95)],
+        classify_scores: vec![("work".to_string(), 0.99)],
+    };
+    let reports =
+        pipe.remember(&mut ex, "User prefers Python for scripting.", &scope(), None, prov()).unwrap();
+    assert_eq!(
+        reports[0].written.as_ref().unwrap().category,
+        lb_memory::types::Category::Preferences
+    );
+}
+
+#[test]
+fn auto_drops_acknowledgments() {
+    let store = Store::ephemeral().unwrap();
+    let pipe = Pipeline::new(&store, PipelineOptions::default());
+    let mut ex = FakeExtractor {
+        mentions: vec![mention("Python", "technology", 0.95)],
+        classify_scores: vec![],
+    };
+    let reports = pipe
+        .remember_auto(&mut ex, "Hello. User prefers Python. Thanks!", &scope(), prov())
+        .unwrap();
+    // "Hello." and "Thanks!" are dropped pre-extraction; only the middle
+    // sentence becomes a fact.
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].written.as_ref().unwrap().content.contains("Python"));
 }

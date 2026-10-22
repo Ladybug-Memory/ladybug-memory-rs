@@ -103,9 +103,13 @@ copied) and `skills/lb-memory/SKILL.md`.
 ## Roadmap (rest of the python port)
 
 - [x] Entity extraction (graph nodes)
+- [x] Classification head (`[L]` tasks: topic/category + argmax decode,
+      parity-tested; worthiness judgments do *not* zero-shot — a dedicated
+      “worth remembering vs chit-chat” probe scored greetings highest, so
+      auto-capture uses a deterministic acknowledgment filter instead)
 - [x] LogicalChunker, entity resolution, conflict/low-confidence gating
-- [x] LadybugDB storage with provenance, FTS→substring search
-- [ ] `classifier.onnx` wiring for `[L]` tasks
+- [x] LadybugDB storage with provenance, FTS search (porter stemmer)
+- [x] Hybrid fact categorization (rule cues, classifier fallback for `General`)
 - [ ] Typed relations (export scorer or LLM fallback)
 - [ ] Embeddings + vector index (recall upgrade)
 - [ ] Dynamic per-type schema tables + schema discovery

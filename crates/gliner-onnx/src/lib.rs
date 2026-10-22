@@ -18,6 +18,13 @@
 //!    settings (`pair_temperature=1`, `abstention_threshold=0.5`,
 //!    `overlap_policy="flat"`, `adaptive_threshold=false`).
 //!
+//! Classification (`[L]`) tasks use the same prompt shape with the marker
+//! swapped — `( [P] {task} ( [L] label … ) ) [SEP_TEXT] …` — and score the
+//! hidden state at each `[L]` marker through `classifier.onnx` in one call
+//! for the whole label set (`sigmoid`, single-label argmax /
+//! multi-label 0.5 + argmax fallback, mirroring
+//! `ExtractorRuntimeMixin._decode_classification_probabilities`).
+//!
 //! Word spans are half-open `[start, end)` over words; character offsets are
 //! half-open over the (punctuation-normalized) text, converted exactly as
 //! `token_boundaries_to_character_offsets` does:
@@ -25,8 +32,7 @@
 //!
 //! What this does **not** do yet: relations (the export has no relation
 //! scorer — `gliner2` scores them in torch via `relation_scorer`, so they
-//! need a separate export or the LLM fallback) and classification
-//! (`classifier.onnx` is loaded but not yet wired to `[L]` prompts).
+//! need a separate export or the LLM fallback).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,6 +49,7 @@ use tokenizers::Tokenizer;
 pub const SEP_TEXT_ID: u32 = 128002;
 pub const P_ID: u32 = 128003;
 pub const E_ID: u32 = 128005;
+pub const L_ID: u32 = 128007;
 
 /// One extracted entity mention.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -68,6 +75,24 @@ pub struct Extraction {
     pub mentions: Vec<Mention>,
     /// Per-label `sigmoid(null_logit)`; queries above 0.5 abstain.
     pub null_probs: Vec<(String, f32)>,
+}
+
+/// Full result of one classification call.
+#[derive(Debug, Clone)]
+pub struct Classification {
+    pub task: String,
+    /// All labels with `sigmoid(logit)`, in input order.
+    pub scores: Vec<(String, f32)>,
+    /// Decided labels: argmax (single-label) or threshold hits with argmax
+    /// fallback (multi-label).
+    pub chosen: Vec<(String, f32)>,
+}
+
+impl Classification {
+    /// Highest-scoring label.
+    pub fn best(&self) -> Option<&(String, f32)> {
+        self.chosen.first()
+    }
 }
 
 /// One word with char offsets into the original text.
@@ -147,13 +172,13 @@ fn sigmoid(x: f32) -> f32 {
     }
 }
 
-/// Prompt tokens for one entity schema group, mirroring
-/// `SchemaTransformer._transform_schema("entities", labels, "[E]")`:
-/// `( [P] entities ( [E] label … ) )`.
-fn entity_schema_tokens(labels: &[String]) -> Vec<String> {
-    let mut toks = vec!["(".to_string(), "[P]".to_string(), "entities".to_string(), "(".to_string()];
+/// Prompt tokens for one schema group, mirroring
+/// `SchemaTransformer._transform_schema(parent, fields, marker)`:
+/// `( [P] {parent} ( [M] field … ) )` with `[M]` = `[E]`/`[C]`/`[R]`/`[L]`.
+fn schema_tokens(parent: &str, marker: &str, labels: &[String]) -> Vec<String> {
+    let mut toks = vec!["(".to_string(), "[P]".to_string(), parent.to_string(), "(".to_string()];
     for lb in labels {
-        toks.push("[E]".to_string());
+        toks.push(marker.to_string());
         toks.push(lb.clone());
     }
     toks.push(")".to_string());
@@ -161,13 +186,19 @@ fn entity_schema_tokens(labels: &[String]) -> Vec<String> {
     toks
 }
 
-/// Loaded model: tokenizer + encoder/boundary sessions.
+/// Prompt tokens for one entity schema group: `( [P] entities ( [E] … ) )`.
+fn entity_schema_tokens(labels: &[String]) -> Vec<String> {
+    schema_tokens("entities", "[E]", labels)
+}
+
+/// Loaded model: tokenizer + encoder/boundary/classifier sessions.
 pub struct GlinerOnnx {
     tokenizer: Tokenizer,
     #[allow(dead_code)] // sessions borrow it; keep alive explicitly
     env: Arc<Environment>,
     encoder: Session,
     boundary: Session,
+    classifier: Session,
     splitter: WhitespaceSplitter,
     snapshot_dir: PathBuf,
 }
@@ -197,7 +228,10 @@ impl GlinerOnnx {
         let boundary = Session::builder(&env)?
             .commit_from_file(dir.join("onnx/boundary.onnx"))
             .with_context(|| format!("loading {}", dir.join("onnx/boundary.onnx").display()))?;
-        Ok(Self { tokenizer, env, encoder, boundary, splitter: WhitespaceSplitter::new()?, snapshot_dir: dir })
+        let classifier = Session::builder(&env)?
+            .commit_from_file(dir.join("onnx/classifier.onnx"))
+            .with_context(|| format!("loading {}", dir.join("onnx/classifier.onnx").display()))?;
+        Ok(Self { tokenizer, env, encoder, boundary, classifier, splitter: WhitespaceSplitter::new()?, snapshot_dir: dir })
     }
 
     pub fn snapshot_dir(&self) -> &Path {
@@ -216,18 +250,42 @@ impl GlinerOnnx {
         }
     }
 
-    /// Build `input_ids`, word-first subword positions, and `[E]` query
-    /// positions. Each prompt token is encoded standalone, exactly like the
-    /// python `_format_input_with_mapping` loop over cached `tokenize()`.
+    /// Build `input_ids`, word-first subword positions, and query-marker
+    /// positions for an entity schema. Each prompt token is encoded
+    /// standalone, exactly like the python `_format_input_with_mapping` loop
+    /// over cached `tokenize()`.
     pub fn build_inputs(
         &self,
+        text: &str,
+        labels: &[String],
+    ) -> Result<BuiltInputs> {
+        self.build_inputs_with("entities", "[E]", E_ID, text, labels)
+    }
+
+    /// Build inputs for a classification schema:
+    /// `( [P] {task} ( [L] label … ) ) [SEP_TEXT] …`, gathering the `[L]`
+    /// marker positions in label order.
+    pub fn build_classify_inputs(
+        &self,
+        text: &str,
+        task: &str,
+        labels: &[String],
+    ) -> Result<BuiltInputs> {
+        self.build_inputs_with(task, "[L]", L_ID, text, labels)
+    }
+
+    fn build_inputs_with(
+        &self,
+        parent: &str,
+        marker: &str,
+        marker_id: u32,
         text: &str,
         labels: &[String],
     ) -> Result<BuiltInputs> {
         let normalized = Self::normalize(text);
         let words = self.splitter.split(&normalized);
 
-        let mut combined: Vec<String> = entity_schema_tokens(labels);
+        let mut combined: Vec<String> = schema_tokens(parent, marker, labels);
         combined.push("[SEP_TEXT]".to_string());
         for w in &words {
             combined.push(w.lowered.clone());
@@ -236,10 +294,10 @@ impl GlinerOnnx {
         let mut input_ids: Vec<i64> = Vec::new();
         let mut word_first: Vec<usize> = Vec::with_capacity(words.len());
         let mut query_pos: Vec<usize> = Vec::with_capacity(labels.len());
-        // Combined-token index of each `[E]` marker: schema tokens are
-        // `( [P] entities ( [E] label … ) )`, so `[E]` sits at 4, 6, 8, ….
+        // Combined-token index of each marker: schema tokens are
+        // `( [P] {parent} ( [M] label … ) )`, so markers sit at 4, 6, 8, ….
         let n_schema = 4 + 2 * labels.len() + 2;
-        let mut e_seen = 0usize;
+        let mut seen = 0usize;
         for (tok_idx, tok) in combined.iter().enumerate() {
             let pos = input_ids.len();
             let enc = self
@@ -248,21 +306,21 @@ impl GlinerOnnx {
                 .map_err(|e| anyhow!("tokenizing {tok:?}: {e}"))?;
             input_ids.extend(enc.get_ids().iter().map(|&id| id as i64));
             if tok_idx < n_schema {
-                // Schema region: `[P]` at 1, `[E]` markers at 4, 6, ….
+                // Schema region: `[P]` at 1, markers at 4, 6, ….
                 if tok_idx == 1 {
                     debug_assert_eq!(input_ids[pos] as u32, P_ID, "[P] id mismatch");
                 }
-                if tok_idx >= 4 && (tok_idx - 4) % 2 == 0 && tok == "[E]" {
-                    debug_assert_eq!(input_ids[pos] as u32, E_ID, "[E] id mismatch");
+                if tok_idx >= 4 && (tok_idx - 4) % 2 == 0 && tok == marker {
+                    debug_assert_eq!(input_ids[pos] as u32, marker_id, "marker id mismatch");
                     query_pos.push(pos);
-                    e_seen += 1;
+                    seen += 1;
                 }
             } else if tok_idx > n_schema {
                 // Text region: first subword of each new word.
                 word_first.push(pos);
             }
         }
-        anyhow::ensure!(e_seen == labels.len(), "found {e_seen} [E] markers for {} labels", labels.len());
+        anyhow::ensure!(seen == labels.len(), "found {seen} markers for {} labels", labels.len());
         anyhow::ensure!(word_first.len() == words.len(), "word routing mismatch");
 
         let starts: Vec<usize> = words.iter().map(|w| w.start).collect();
@@ -374,6 +432,67 @@ impl GlinerOnnx {
         });
         Ok(Extraction { normalized_text: built.normalized, mentions, null_probs })
     }
+
+    /// Score `labels` for a classification `task` (e.g. sentiment, topic).
+    ///
+    /// One encoder pass over the `[L]` prompt, then a single `classifier.onnx`
+    /// call for the whole label set (`[n,768] → [n,1]`), exactly like the
+    /// DanKau README's classification path. Decodes with `sigmoid`:
+    /// single-label returns argmax; multi-label returns hits above
+    /// `threshold` with argmax fallback when none clears — mirroring
+    /// `_decode_classification_probabilities` (default threshold 0.5,
+    /// temperature 1.0).
+    pub fn classify(
+        &mut self,
+        text: &str,
+        task: &str,
+        labels: &[String],
+        multi_label: bool,
+        threshold: f32,
+    ) -> Result<Classification> {
+        let built = self.build_classify_inputs(text, task, labels)?;
+        let seq_len = built.input_ids.len();
+        let n = labels.len();
+
+        let input_ids = Tensor::from_array((vec![1, seq_len as i64], built.input_ids.clone()))?.upcast();
+        let attention_mask = Tensor::from_array((vec![1, seq_len as i64], vec![1i64; seq_len]))?.upcast();
+        let outputs = self.encoder.run(ort::inputs![input_ids, attention_mask])?;
+        let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
+        let hdim: Vec<i64> = hshape.iter().copied().collect();
+        anyhow::ensure!(hdim == vec![1, seq_len as i64, 768], "unexpected encoder output shape {hdim:?}");
+        let mut states = vec![0f32; n * 768];
+        for (q, &pos) in built.query_pos.iter().enumerate() {
+            states[q * 768..(q + 1) * 768].copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
+        }
+        let hidden = Tensor::from_array((vec![n as i64, 768], states))?.upcast();
+        let couts = self.classifier.run(ort::inputs!["hidden_state" => hidden])?;
+        let (_, logits) = couts["logit"].try_extract_tensor::<f32>()?;
+        let scores: Vec<(String, f32)> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, lb)| (lb.clone(), sigmoid(logits[i])))
+            .collect();
+        let mut ranked: Vec<usize> = (0..n).collect();
+        ranked.sort_by(|&a, &b| {
+            scores[b]
+                .1
+                .partial_cmp(&scores[a].1)
+                .unwrap()
+                .then(a.cmp(&b))
+        });
+        let best = ranked[0];
+        let chosen: Vec<(String, f32)> = if multi_label {
+            let mut hits: Vec<(String, f32)> =
+                ranked.iter().map(|&i| scores[i].clone()).filter(|(_, p)| *p >= threshold).collect();
+            if hits.is_empty() {
+                hits.push(scores[best].clone());
+            }
+            hits
+        } else {
+            vec![scores[best].clone()]
+        };
+        Ok(Classification { task: task.to_string(), scores, chosen })
+    }
 }
 
 /// Tokenized prompt plus routing tables.
@@ -384,7 +503,7 @@ pub struct BuiltInputs {
     pub input_ids: Vec<i64>,
     /// Subword position of each word's first sub-token.
     pub word_first: Vec<usize>,
-    /// Subword positions of the `[E]` query markers, in label order.
+    /// Subword positions of the query markers (`[E]` or `[L]`), in label order.
     pub query_pos: Vec<usize>,
     pub starts: Vec<usize>,
     pub ends: Vec<usize>,

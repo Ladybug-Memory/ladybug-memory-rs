@@ -36,9 +36,37 @@ pub fn classify(text: &str) -> Category {
     Category::General
 }
 
+/// Short acknowledgments/greetings with no durable content (“hello”,
+/// “thanks!”, “got it.”). The classifier head separates these cleanly
+/// (hello/hi/thanks ≈ 0.94–1.0 “greeting”, everything else ≤ 0.07), but a
+/// regex catches the short canonical shapes at zero model cost — use it as
+/// the auto-capture pre-filter, never on explicit `remember` (user intent
+/// is never second-guessed).
+pub fn is_acknowledgment(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    let t = t.trim_end_matches(['.', '!', '?', '…']).trim();
+    matches!(
+        t,
+        "hi" | "hello" | "hey" | "thanks" | "thank you" | "thx" | "got it" | "ok" | "okay" | "k"
+            | "sure" | "yes" | "yeah" | "yep" | "no" | "nope" | "bye" | "welcome"
+            | "good morning" | "good afternoon" | "good evening"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acknowledgments_detected() {
+        for s in ["hello", "thanks!", "Got it.", "ok", "Thank you.", "good morning"] {
+            assert!(is_acknowledgment(s), "{s}");
+        }
+        // Extra content disqualifies: not bare acknowledgments.
+        for s in ["Hi there!", "User prefers Python.", "ok, deploying now", "thanks, merged"] {
+            assert!(!is_acknowledgment(s), "{s}");
+        }
+    }
 
     #[test]
     fn cue_classification() {

@@ -19,15 +19,26 @@ use anyhow::Result;
 use regex::Regex;
 
 use crate::chunker::{LogicalChunker, split_sentences};
-use crate::classify::classify;
+use crate::classify::{classify, is_acknowledgment};
 use crate::conflicts::{FactVerdict, decide};
 use crate::model::Extractor;
 use crate::resolve::{KnownEntity, compare, resolve};
 use crate::store::Store;
 use crate::types::{
-    FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport, ScoredMention, Scope,
+    Category, FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport, ScoredMention, Scope,
     SearchHit,
 };
+
+/// Labels for model-based fact categorization (must match `Category`).
+/// Used only when rule cues abstain (`General`) — deterministic first,
+/// model as fallback.
+const CATEGORY_TASK: &str = "category";
+fn category_labels() -> Vec<String> {
+    ["identity", "preferences", "goals", "projects", "decisions", "technical", "relationships", "routines", "lessons", "work", "general"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
 
 pub struct PipelineOptions {
     /// GLiNER threshold for keeping a mention.
@@ -70,6 +81,11 @@ impl<'s> Pipeline<'s> {
         let mut facts = Vec::new();
         for (sent, base) in split_sentences(text) {
             if sent.trim().is_empty() {
+                continue;
+            }
+            // Worthiness pre-filter: bare acknowledgments carry no durable
+            // content. Explicit `remember` never reaches this branch.
+            if is_acknowledgment(&sent) {
                 continue;
             }
             let (fact_text, mentions) = self.extract_one(extractor, &sent, base)?;
@@ -139,7 +155,7 @@ impl<'s> Pipeline<'s> {
         provenance: Provenance,
     ) -> Result<Vec<RememberReport>> {
         let facts = self.extract_facts(extractor, text, false)?;
-        self.write_facts(facts, scope, importance, provenance)
+        self.write_facts(extractor, facts, scope, importance, provenance)
     }
 
     /// Auto-capture: distill to one fact per entity-bearing sentence.
@@ -155,11 +171,12 @@ impl<'s> Pipeline<'s> {
         let facts = self.extract_facts(extractor, text, true)?;
         let mut prov = provenance;
         prov.auto_captured = true;
-        self.write_facts(facts, scope, None, prov)
+        self.write_facts(extractor, facts, scope, None, prov)
     }
 
     fn write_facts(
         &self,
+        extractor: &mut dyn Extractor,
         facts: Vec<(String, Vec<ScoredMention>)>,
         scope: &Scope,
         importance: Option<i64>,
@@ -170,13 +187,14 @@ impl<'s> Pipeline<'s> {
         // New entities created earlier in this call are visible to later facts.
         let mut known = known;
         for (fact_text, extracted) in facts {
-            reports.push(self.write_one(fact_text, extracted, scope, importance, &provenance, &mut known)?);
+            reports.push(self.write_one(extractor, fact_text, extracted, scope, importance, &provenance, &mut known)?);
         }
         Ok(reports)
     }
 
     fn write_one(
         &self,
+        extractor: &mut dyn Extractor,
         fact_text: String,
         extracted: Vec<ScoredMention>,
         scope: &Scope,
@@ -187,7 +205,17 @@ impl<'s> Pipeline<'s> {
         // Steps 2-3: compare + resolve against the live schema.
         let compared = compare(&extracted, known);
         let resolved = resolve(&compared, known);
-        let category = classify(&fact_text);
+        // Categorize: deterministic cues first, model fallback when they
+        // abstain. The model is already loaded in the remember path, so
+        // this is one extra encoder pass (~20 ms), not a new dependency.
+        let mut category = classify(&fact_text);
+        if category == Category::General {
+            if let Ok(scores) = extractor.classify(&fact_text, CATEGORY_TASK, &category_labels()) {
+                if let Some((best, _)) = scores.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()) {
+                    category = Category::parse(best);
+                }
+            }
+        }
         let session = scope.session_id.as_deref();
 
         // Step 4: decide.
