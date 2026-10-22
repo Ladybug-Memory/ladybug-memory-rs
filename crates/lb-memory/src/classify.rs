@@ -6,7 +6,7 @@
 use crate::types::Category;
 
 const CUES: &[(Category, &[&str])] = &[
-    (Category::Preferences, &["prefer", "prefers", "preferred", "like", "likes", "liked", "love", "loves", "loved", "hate", "hates", "hated", "dislike", "dislikes", "favour", "favor", "favourite", "favorite", "always use", "never use", "go-to", "goto"]),
+    (Category::Preferences, &["prefer", "prefers", "preferred", "like", "likes", "liked", "love", "loves", "loved", "hate", "hates", "hated", "dislike", "dislikes", "favour", "favor", "favourite", "favorite", "always use", "never use", "go-to", "goto", "always", "never", "have to", "has to", "make sure", "be sure to"]),
     (Category::Identity, &["i am", "i'm", "my name is", "i live in", "i work as", "background in", "years old"]),
     (Category::Goals, &["goal is", "trying to", "want to", "plan to", "aim to", "objective", "target is", "aspire"]),
     (Category::Decisions, &["decided", "decide", "decision", "chose", "chosen", "choose", "picked", "pick", "opted for", "went with", "trade-off", "tradeoff", "rationale", "instead of"]),

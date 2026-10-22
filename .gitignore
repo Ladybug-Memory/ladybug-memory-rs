@@ -16,6 +16,9 @@
 *.swp
 *~
 
+# JS deps (reinstallable; pi-plugin has no build step)
+node_modules/
+
 # Profiling / coverage
 perf.data
 perf.data.old

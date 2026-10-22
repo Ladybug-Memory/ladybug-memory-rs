@@ -37,3 +37,14 @@ lbm review --drop <id>              # discard
 
 Prefer `remember` for durable facts (decisions, preferences, identities,
 gotchas). Do not store secrets; do not store whole conversation excerpts.
+
+## Standing safeguards
+
+A `tool_call` handler consults memory on every `bash` invocation: when the
+command contains `git rebase` and a recalled fact prescribes an env
+safeguard (`GIT_EDITOR=true`), the handler prepends the missing assignment
+by mutating the tool input — the hang the memory records cannot happen even
+if the model never recalls the fact. Only leading `VAR=value` assignments
+are ever added; the command itself is never rewritten; failures run the
+command unmodified. Each application notifies with the memory id.
+See `safeguard-smoke.mjs` (10 checks, mock pi + real `lbm`).

@@ -109,6 +109,65 @@ function formatRemember(stdout: string): string {
 	}
 }
 
+/**
+ * Standing operational safeguards, enforced at every matching tool call.
+ *
+ * When the agent runs `git rebase` (or any command a memory prescribes an
+ * environment safeguard for), the handler recalls lb-memory, extracts
+ * `VAR=value` prescriptions from the hits, and prepends the missing ones
+ * by mutating `event.input` in place — so the hang this memory records
+ * (waiting for an interactive editor) cannot happen, even if the model
+ * never saw the fact. Every application is notified with the memory id.
+ *
+ * Rules: only leading `VAR=value` assignments are ever added (the command
+ * itself is never rewritten); commands that already set the var are left
+ * alone; any failure fails open (command runs unmodified) — memory must
+ * never break the session. Recall is model-free (no GLiNER load), ~50 ms.
+ */
+const REBASE_COMMAND = /\bgit\s+rebase\b/;
+const ENV_PRESCRIPTION = /\b([A-Z][A-Z0-9_]{2,})=(\S+)/g;
+
+export type SafeguardDecision = {
+	readonly command: string;
+	readonly applied: readonly { readonly assignment: string; readonly memoryId: unknown }[];
+};
+
+function hasEnvAssignment(command: string, name: string): boolean {
+	return new RegExp(`(?:^|[\\s;&|])${name}=`).test(command);
+}
+
+/** Pure decision step (unit-testable): which safeguards to prepend. */
+export function decideSafeguards(command: string, memories: readonly { readonly id?: unknown; readonly content?: unknown }[]): SafeguardDecision {
+	if (!REBASE_COMMAND.test(command)) return { command, applied: [] };
+	const applied: { assignment: string; memoryId: unknown }[] = [];
+	let next = command;
+	for (const memory of memories) {
+		if (typeof memory.content !== "string") continue;
+		ENV_PRESCRIPTION.lastIndex = 0;
+		for (const match of memory.content.matchAll(ENV_PRESCRIPTION)) {
+			const name = match[1] ?? "";
+			const assignment = `${name}=${match[2] ?? ""}`;
+			if (hasEnvAssignment(next, name)) continue;
+			next = `${assignment} ${next}`;
+			applied.push({ assignment, memoryId: memory.id });
+		}
+	}
+	return { command: next, applied };
+}
+
+type LbmSearchJson = {
+	readonly hits?: readonly { readonly entry?: { readonly id?: unknown; readonly content?: unknown } }[];
+};
+
+async function recallSafeguardMemories(bin: string, cwd: string, query: string): Promise<LbmSearchJson["hits"]> {
+	const { stdout } = await runLbm(bin, ["search", "--scope", "project", "--json", query], cwd);
+	try {
+		return (JSON.parse(stdout) as LbmSearchJson).hits ?? [];
+	} catch {
+		return [];
+	}
+}
+
 type SearchPayload = {
 	readonly hits?: readonly {
 		readonly entry?: { readonly id?: unknown; readonly content?: unknown; readonly category?: unknown };
@@ -157,6 +216,31 @@ export function createLbMemoryExtension(pi: ExtensionAPI, deps: LbMemoryDeps): v
 
 	// Live feed: distill finalized messages into facts. Entity-less sentences
 	// are dropped by `lbm remember --auto`, so transcripts are never copied.
+	// Standing safeguards: consult memory on every bash call and enforce
+	// env-var prescriptions (e.g. GIT_EDITOR=true for git rebase) by
+	// mutating the command in place. Fail-open: any error runs unmodified.
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName !== "bash") return;
+		const command = typeof event.input.command === "string" ? event.input.command : "";
+		if (!REBASE_COMMAND.test(command)) return;
+		let memories: LbmSearchJson["hits"] = [];
+		try {
+			memories = await recallSafeguardMemories(lbmBin(), ctx.cwd, "git rebase");
+		} catch {
+			return;
+		}
+		const flat = (memories ?? []).map((hit) => ({ id: hit.entry?.id, content: hit.entry?.content }));
+		const decision = decideSafeguards(command, flat);
+		if (decision.applied.length === 0) return;
+		event.input.command = decision.command;
+		for (const applied of decision.applied) {
+			ctx.ui.notify(
+				`lb-memory: applied memory #${String(applied.memoryId ?? "?")} — prepended \`${applied.assignment}\` to git rebase`,
+				"info",
+			);
+		}
+	});
+
 	pi.on("message_end", async (event, ctx) => {
 		const message = (event as { readonly message?: unknown }).message as AgentMessage | undefined;
 		if (message === undefined) return;

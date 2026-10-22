@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use regex::Regex;
 
 use crate::chunker::{LogicalChunker, split_sentences};
 use crate::classify::classify;
@@ -119,6 +120,7 @@ impl<'s> Pipeline<'s> {
             }
         }
         let mut mentions: Vec<ScoredMention> = best.into_values().collect();
+        augment_code_identifiers(fact_text, &to_char, &mut mentions);
         mentions.sort_by(|a, b| {
             b.confidence.partial_cmp(&a.confidence).unwrap().then(a.start.cmp(&b.start))
         });
@@ -361,7 +363,49 @@ fn is_generic_surface(text: &str) -> bool {
     matches!(
         text.trim().to_lowercase().as_str(),
         "user" | "users" | "person" | "people" | "someone" | "something" | "anything" | "thing" | "things"
+        // Bare references to AI models (“models often…”) — the agent talking
+        // about itself, not a real-world entity.
+        | "model" | "models" | "ai" | "llm" | "llms"
     )
+}
+
+/// Deterministic augmenter for code-like identifiers GLiNER's labels miss:
+/// `backtick spans` and ALL_CAPS tokens (env vars, constants, acronyms).
+/// Fixed 0.65 confidence, `technology` type; skipped where a model mention
+/// already covers the span.
+fn augment_code_identifiers(fact_text: &str, to_char: &[usize], mentions: &mut Vec<ScoredMention>) {
+    let backtick = Regex::new(r"`([^`\n]{1,60})`").expect("backtick regex");
+    let caps = Regex::new(r"\b[A-Z][A-Z0-9_]{2,}\b").expect("caps regex");
+    let overlaps = |mentions: &[ScoredMention], s: usize, e: usize| mentions.iter().any(|m| s < m.end && m.start < e);
+    let mut found: Vec<(usize, usize, String)> = Vec::new();
+    for cap in backtick.captures_iter(fact_text) {
+        let inner = cap.get(1).expect("inner match");
+        let text = inner.as_str().trim().to_string();
+        if text.is_empty() || text.contains(' ') && text.len() > 40 {
+            continue;
+        }
+        found.push((byte_to_char(to_char, inner.start()), byte_to_char(to_char, inner.end()), text));
+    }
+    for m in caps.find_iter(fact_text) {
+        found.push((byte_to_char(to_char, m.start()), byte_to_char(to_char, m.end()), m.as_str().to_string()));
+    }
+    for (s, e, text) in found {
+        if overlaps(mentions, s, e) || mentions.iter().any(|m| m.text == text) {
+            continue;
+        }
+        let words = text.split_whitespace().count();
+        mentions.push(ScoredMention {
+            text,
+            entity_type: "technology".to_string(),
+            confidence: 0.65,
+            start: s,
+            end: e,
+            // Word grid is the extractor's coordinate space; char spans
+            // above are authoritative for storage.
+            word_start: 0,
+            word_end: words,
+        });
+    }
 }
 
 /// Byte offset → char offset map for a string: `map[b]` is the number of
