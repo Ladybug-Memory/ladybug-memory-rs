@@ -5,6 +5,11 @@
 *.lbdb
 *.lbdb.wal
 
+# SQLite intake databases (siblings of the .lbdb) are user data too
+*.intake.sqlite
+*.intake.sqlite-wal
+*.intake.sqlite-shm
+
 # macOS noise
 .DS_Store
 .AppleDouble
