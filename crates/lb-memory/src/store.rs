@@ -25,6 +25,7 @@ const SCHEMA_STATEMENTS: &[&str] = &[
 pub struct Store {
     db: Database,
     fts_ready: bool,
+    db_path: Option<String>,
 }
 
 impl Store {
@@ -37,7 +38,7 @@ impl Store {
         }
         let db = Database::new(path, SystemConfig::default())
             .with_context(|| format!("opening ladybug db at {path}"))?;
-        let mut store = Self { db, fts_ready: false };
+        let mut store = Self { db, fts_ready: false, db_path: Some(path.to_string()) };
         store.ensure_schema()?;
         Ok(store)
     }
@@ -45,9 +46,95 @@ impl Store {
     /// In-memory database (tests).
     pub fn ephemeral() -> Result<Self> {
         let db = Database::in_memory(SystemConfig::default()).context("opening :memory: db")?;
-        let mut store = Self { db, fts_ready: false };
+        let mut store = Self { db, fts_ready: false, db_path: None };
         store.ensure_schema()?;
         Ok(store)
+    }
+
+    /// The database file path, if file-backed.
+    pub fn db_path(&self) -> Option<&str> {
+        self.db_path.as_deref()
+    }
+
+    /// The SQLite intake database for this store: the sibling
+    /// `<stem>.intake.sqlite` for file-backed stores, in-memory otherwise.
+    /// This is the first-class write path — memories land here before the
+    /// graph (see `sqlite_sync`).
+    pub fn intake_db(&self) -> Result<crate::sqlite_sync::IntakeDb> {
+        match &self.db_path {
+            Some(p) => crate::sqlite_sync::IntakeDb::open(&crate::sqlite_sync::sibling_intake_path(p)),
+            None => crate::sqlite_sync::IntakeDb::open_ephemeral(),
+        }
+    }
+
+    /// Raw Cypher for callers that drive optional integrations (e.g. the
+    /// `sqlite` extension's `CALL sqlite_sync`).
+    pub fn run_cypher(&self, cypher: &str) -> Result<Vec<Vec<Value>>> {
+        self.run(cypher, vec![])
+    }
+
+    /// Fetch the `sqlite` extension the official way: `INSTALL sqlite`
+    /// (idempotent — downloads the latest 0.22.x build from the extension
+    /// repo into `~/.lbdb/extension` only when missing) then `LOAD sqlite`
+    /// by name. This is the production path. The host links liblbug shared
+    /// (see `.cargo/config.toml`), which is what lets the extension resolve
+    /// engine symbols.
+    pub fn ensure_sqlite_extension(&self) -> Result<()> {
+        self.run("INSTALL sqlite", vec![])?.into_iter().for_each(drop);
+        self.run("LOAD sqlite", vec![])?.into_iter().for_each(drop);
+        Ok(())
+    }
+
+    /// Load a locally built `sqlite` extension binary by explicit path.
+    /// Testing/dev override for extension hacking (see README); production
+    /// uses [`Self::ensure_sqlite_extension`] (`LOAD sqlite` by name).
+    pub fn load_sqlite_extension(&self, ext_path: &str) -> Result<()> {
+        let lit = cypher_path_lit(ext_path);
+        self.run(&format!("LOAD EXTENSION '{lit}'"), vec![])?.into_iter().for_each(drop);
+        Ok(())
+    }
+
+    /// Register this store's intake staging tables with the loaded `sqlite`
+    /// extension, remapping staging labels onto the native graph tables.
+    /// Idempotent (backed by the extension's `__sqlite_cdc_map` MERGE).
+    /// Returns the per-table status strings.
+    pub fn sqlite_register_all(&self, sqlite_path: &str) -> Result<Vec<String>> {
+        let lit = cypher_path_lit(sqlite_path);
+        let calls = [
+            format!("CALL sqlite_register_node('{lit}', 'node_Memory', 'Memory', 'id') RETURN *"),
+            format!("CALL sqlite_register_node('{lit}', 'node_Entity', 'Entity', 'id') RETURN *"),
+            format!("CALL sqlite_register_edge('{lit}', 'rel_MentionedIn', 'MentionedIn', 'src_id', 'dst_id') RETURN *"),
+            format!("CALL sqlite_register_edge('{lit}', 'rel_RelatesTo', 'RelatesTo', 'src_id', 'dst_id') RETURN *"),
+            format!("CALL sqlite_register_edge('{lit}', 'rel_ConflictsWith', 'ConflictsWith', 'src_id', 'dst_id') RETURN *"),
+        ];
+        let mut out = Vec::new();
+        for call in &calls {
+            let rows = self.run(call, vec![])?;
+            let status = rows
+                .first()
+                .and_then(|r| r.first())
+                .map(|v| format!("{v:?}"))
+                .unwrap_or_default();
+            out.push(status);
+        }
+        Ok(out)
+    }
+
+    /// One extension-driven replication tick: `CALL sqlite_sync(path)`.
+    /// Returns `(tables_synced, rows_upserted, rows_deleted, applied_frames,
+    /// status)`. Any engine error is returned verbatim — the caller (see
+    /// `Pipeline::remember_via_sqlite`) falls back to the embedded applier.
+    pub fn sqlite_sync_tick(&self, sqlite_path: &str) -> Result<(i64, i64, i64, i64, String)> {
+        let lit = cypher_path_lit(sqlite_path);
+        let rows = self.run(&format!("CALL sqlite_sync('{lit}') RETURN *"), vec![])?;
+        let row = rows.first().ok_or_else(|| anyhow!("sqlite_sync returned no row"))?;
+        Ok((
+            as_i64(&row[0])?,
+            as_i64(&row[1])?,
+            as_i64(&row[2])?,
+            as_i64(&row[3])?,
+            as_string(&row[4]).unwrap_or_default(),
+        ))
     }
 
     fn conn(&self) -> Result<Connection<'_>> {
@@ -546,6 +633,58 @@ impl Store {
         rows.iter().map(row_to_entry).collect()
     }
 
+    /// Exact content+scope match, any status. Used by the SQLite fallback
+    /// applier to converge after a partial extension tick (the extension
+    /// applies statement-by-statement, so a failed tick can leave committed
+    /// node rows behind): a staged `written` fact that already exists
+    /// natively is the tick's own row, never a coincidence — the pipeline's
+    /// decide step keeps true duplicates out of staging.
+    pub fn find_exact_memory(
+        &self,
+        content: &str,
+        user: &str,
+        project: &str,
+        session: &str,
+    ) -> Result<Option<i64>> {
+        let rows = self.run(
+            "MATCH (m:Memory) WHERE m.content = $c AND m.user_id = $u AND m.project = $p AND m.session_id = $s RETURN m.id LIMIT 1",
+            vec![
+                ("c", Value::String(content.to_string())),
+                ("u", Value::String(user.to_string())),
+                ("p", Value::String(project.to_string())),
+                ("s", Value::String(session.to_string())),
+            ],
+        )?;
+        rows.first().map(|r| as_i64(&r[0])).transpose()
+    }
+
+    /// Whether this exact mention edge already exists (fallback replay guard).
+    pub fn has_mention(
+        &self,
+        entity_id: i64,
+        memory_id: i64,
+        mention_text: &str,
+        span_start: i64,
+        span_end: i64,
+    ) -> Result<bool> {
+        let rows = self.run(
+            "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE e.id = $eid AND m.id = $mid AND r.mention_text = $t AND r.span_start = $s AND r.span_end = $e RETURN r.confidence LIMIT 1",
+            vec![
+                ("eid", Value::Int64(entity_id)),
+                ("mid", Value::Int64(memory_id)),
+                ("t", Value::String(mention_text.to_string())),
+                ("s", Value::Int64(span_start)),
+                ("e", Value::Int64(span_end)),
+            ],
+        )?;
+        Ok(!rows.is_empty())
+    }
+
+    /// Whether a ConflictsWith edge already runs from `new_id` to `old_id`.
+    pub fn has_conflict(&self, new_id: i64, old_id: i64) -> Result<bool> {
+        Ok(self.conflicts_of(new_id)?.iter().any(|(id, _)| *id == old_id))
+    }
+
     pub fn get_memory(&self, id: i64) -> Result<Option<MemoryEntry>> {
         let rows = self.run(
             "MATCH (m:Memory) WHERE m.id = $id RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at",
@@ -622,6 +761,11 @@ impl Store {
             })
             .collect()
     }
+}
+
+/// Escape a filesystem path for embedding in a single-quoted Cypher literal.
+fn cypher_path_lit(path: &str) -> String {
+    path.replace('\\', "\\\\").replace('\'', "''")
 }
 
 fn clamp_limit(limit: usize) -> usize {

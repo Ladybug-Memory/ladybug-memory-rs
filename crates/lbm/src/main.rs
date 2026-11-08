@@ -5,6 +5,8 @@
 //!
 //! ```sh
 //! lbm remember "User prefers Python for scripting" --scope project
+//! lbm remember "Fact" --via-sqlite    # sqlite-first: intake -> GLiNER -> stage -> sync
+//! lbm sync                             # drain any pending sqlite intake (crash recovery)
 //! lbm search "python" --json
 //! lbm forget "python"            # lists matches; --apply deletes
 //! lbm tour --json
@@ -61,7 +63,7 @@ fn parse_args(raw: &[String]) -> Args {
 fn is_bool_flag(name: &str) -> bool {
     // NB: accept/drop take values (--accept <id>); listing them here would
     // swallow the id into positionals.
-    matches!(name, "json" | "auto" | "apply" | "verbose" | "include-review")
+    matches!(name, "json" | "auto" | "apply" | "verbose" | "include-review" | "via-sqlite")
 }
 
 impl Args {
@@ -183,13 +185,14 @@ fn print_json(v: &serde_json::Value) {
 fn main() -> Result<()> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.is_empty() {
-        eprintln!("usage: lbm <remember|search|forget|tour|status|review> [--json] ...");
+        eprintln!("usage: lbm <remember|sync|search|forget|tour|status|review> [--json] ...");
         std::process::exit(2);
     }
     let cmd = raw[0].clone();
     let args = parse_args(&raw[1..]);
     match cmd.as_str() {
         "remember" => cmd_remember(args),
+        "sync" => cmd_sync(args),
         "search" => cmd_search(args),
         "forget" => cmd_forget(args),
         "tour" => cmd_tour(args),
@@ -202,6 +205,14 @@ fn main() -> Result<()> {
 fn open_store(args: &Args) -> Result<Store> {
     let path = args.str("db").map(str::to_string).unwrap_or_else(default_db);
     Store::open(&path).with_context(|| format!("opening {path}"))
+}
+
+fn open_intake(args: &Args, store: &Store) -> Result<lb_memory::sqlite_sync::IntakeDb> {
+    if let Some(p) = args.str("sqlite-path") {
+        lb_memory::sqlite_sync::IntakeDb::open(p).with_context(|| format!("opening {p}"))
+    } else {
+        store.intake_db()
+    }
 }
 
 fn cmd_remember(args: Args) -> Result<()> {
@@ -236,6 +247,37 @@ fn cmd_remember(args: Args) -> Result<()> {
         auto_captured: false,
     };
     let importance = args.str("importance").and_then(|s| s.parse().ok());
+    // SQLite-first: intake -> GLiNER -> stage -> sync tick. The tick uses
+    // the `sqlite` extension via INSTALL + LOAD (`--extension <path>`
+    // overrides with a local build), falling back to the embedded applier.
+    if args.bool("via-sqlite") {
+        let intake = open_intake(&args, &store)?;
+        let ext = match args.str("extension") {
+            Some(p) => Some(lb_memory::sqlite_sync::ExtensionSource::File(p)),
+            None => Some(lb_memory::sqlite_sync::ExtensionSource::Repo),
+        };
+        let (reports, stats) = if args.bool("auto") {
+            prov.auto_captured = true;
+            pipe.remember_auto_via_sqlite(&mut extractor, &intake, &text, &scope, prov, ext)?
+        } else {
+            pipe.remember_via_sqlite(&mut extractor, &intake, &text, &scope, importance, prov, ext)?
+        };
+        if args.bool("json") {
+            print_json(&serde_json::json!({
+                "reports": reports,
+                "sync": { "via": stats.via, "applied_intake": stats.applied_intake,
+                          "rows_upserted": stats.rows_upserted, "status": stats.status },
+                "intake": intake.path(),
+            }));
+            return Ok(());
+        }
+        for r in &reports {
+            print_report(r);
+        }
+        println!("sync via {}: applied {} intake, {} rows upserted ({}) [{}]",
+            stats.via, stats.applied_intake, stats.rows_upserted, stats.status, intake.path());
+        return Ok(());
+    }
     let reports = if args.bool("auto") {
         prov.auto_captured = true;
         pipe.remember_auto(&mut extractor, &text, &scope, prov)?
@@ -248,6 +290,12 @@ fn cmd_remember(args: Args) -> Result<()> {
         return Ok(());
     }
     for r in &reports {
+        print_report(r);
+    }
+    Ok(())
+}
+
+fn print_report(r: &lb_memory::types::RememberReport) {
         let step1: Vec<String> =
             r.extracted.iter().map(|m| format!("{}[{:.2}]", m.text, m.confidence)).collect();
         println!("extract: {}", step1.join(", "));
@@ -273,7 +321,32 @@ fn cmd_remember(args: Args) -> Result<()> {
             Some(w) => println!("stored #{} [{}|{}]: {}", w.id, w.category.as_str(), w.status.as_str(), w.content),
             None => println!("stored: nothing"),
         }
+}
+
+/// Drain any pending SQLite intake into the graph (crash recovery,
+/// daemon-less tick). Uses the `sqlite` extension via INSTALL + LOAD
+/// (`--extension <path>` overrides with a local build), falling back to the
+/// embedded applier on any engine error.
+fn cmd_sync(args: Args) -> Result<()> {
+    let store = open_store(&args)?;
+    let intake = open_intake(&args, &store)?;
+    let pipe = Pipeline::new(&store, PipelineOptions::default());
+    let ext = match args.str("extension") {
+        Some(p) => Some(lb_memory::sqlite_sync::ExtensionSource::File(p)),
+        None => Some(lb_memory::sqlite_sync::ExtensionSource::Repo),
+    };
+    let stats = pipe.sync_intake(&intake, ext)?;
+    if args.bool("json") {
+        print_json(&serde_json::json!({
+            "intake": intake.path(),
+            "via": stats.via, "applied_intake": stats.applied_intake,
+            "rows_upserted": stats.rows_upserted, "status": stats.status,
+        }));
+        return Ok(());
     }
+    println!("intake: {}", intake.path());
+    println!("sync via {}: applied {} intake, {} rows upserted ({})",
+        stats.via, stats.applied_intake, stats.rows_upserted, stats.status);
     Ok(())
 }
 
@@ -403,16 +476,24 @@ fn cmd_status(args: Args) -> Result<()> {
     let store = open_store(&args)?;
     let (mem, ent, men, rev) = store.counts()?;
     let path = args.str("db").map(str::to_string).unwrap_or_else(default_db);
+    // SQLite intake (first-class write path): report pending work when the
+    // intake file exists; missing file just means the direct path is in use.
+    let (intake_path, pending) = match open_intake(&args, &store) {
+        Ok(db) => (db.path().to_string(), db.pending_count().unwrap_or(0)),
+        Err(_) => ("-".to_string(), 0),
+    };
     if args.bool("json") {
         print_json(&serde_json::json!({
             "db": path, "memories": mem, "entities": ent,
             "mentions": men, "needs_review": rev,
             "labels": DEFAULT_LABELS_NOTE,
+            "intake": intake_path, "intake_pending": pending,
         }));
         return Ok(());
     }
     println!("db: {path}");
     println!("memories: {mem}, entities: {ent}, mentions: {men}, needs_review: {rev}");
+    println!("intake: {intake_path} (pending: {pending})");
     Ok(())
 }
 

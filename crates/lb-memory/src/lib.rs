@@ -6,6 +6,7 @@ pub mod conflicts;
 pub mod model;
 pub mod pipeline;
 pub mod resolve;
+pub mod sqlite_sync;
 pub mod store;
 pub mod types;
 

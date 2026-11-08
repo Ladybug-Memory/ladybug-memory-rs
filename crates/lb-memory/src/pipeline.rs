@@ -25,9 +25,24 @@ use crate::model::Extractor;
 use crate::resolve::{KnownEntity, compare, resolve};
 use crate::store::Store;
 use crate::types::{
-    Category, FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport, ScoredMention, Scope,
-    SearchHit,
+    Category, ComparedEntity, FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport,
+    ResolvedEntity, ScoredMention, Scope, SearchHit,
 };
+
+/// Steps 2-4 output: everything `commit_plan` (direct write) or
+/// `stage_plan` (SQLite staging) needs, with no graph writes yet.
+struct FactPlan {
+    fact_text: String,
+    extracted: Vec<ScoredMention>,
+    compared: Vec<ComparedEntity>,
+    resolved: Vec<ResolvedEntity>,
+    category: Category,
+    status: MemoryStatus,
+    decision: FactDecision,
+    conflicts: Vec<(i64, Vec<String>)>,
+    duplicate_of: Option<(i64, f32)>,
+    importance: i64,
+}
 
 /// Labels for model-based fact categorization (must match `Category`).
 /// Used only when rule cues abstain (`General`) — deterministic first,
@@ -202,6 +217,22 @@ impl<'s> Pipeline<'s> {
         provenance: &Provenance,
         known: &mut Vec<KnownEntity>,
     ) -> Result<RememberReport> {
+        let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, known)?;
+        self.commit_plan(plan, scope, provenance, known)
+    }
+
+    /// Steps 2-4 of the pipeline: compare + resolve against the live schema,
+    /// categorize, decide. Pure planning — no graph writes — so the same plan
+    /// feeds either the direct commit or the SQLite staging path.
+    fn plan_one(
+        &self,
+        extractor: &mut dyn Extractor,
+        fact_text: String,
+        extracted: Vec<ScoredMention>,
+        scope: &Scope,
+        importance: Option<i64>,
+        known: &[KnownEntity],
+    ) -> Result<FactPlan> {
         // Steps 2-3: compare + resolve against the live schema.
         let compared = compare(&extracted, known);
         let resolved = resolve(&compared, known);
@@ -263,6 +294,41 @@ impl<'s> Pipeline<'s> {
             }
         }
 
+        Ok(FactPlan {
+            fact_text,
+            extracted,
+            compared,
+            resolved,
+            category,
+            status,
+            decision,
+            conflicts,
+            duplicate_of,
+            importance: importance.unwrap_or(self.opts.importance),
+        })
+    }
+
+    /// Step 5 of the pipeline: write the graph + provenance.
+    fn commit_plan(
+        &self,
+        plan: FactPlan,
+        scope: &Scope,
+        provenance: &Provenance,
+        known: &mut Vec<KnownEntity>,
+    ) -> Result<RememberReport> {
+        let FactPlan {
+            fact_text,
+            extracted,
+            compared,
+            resolved,
+            category,
+            status,
+            decision,
+            conflicts,
+            duplicate_of,
+            importance,
+        } = plan;
+        let session = scope.session_id.as_deref();
         // Step 5: write the graph + provenance.
         let written: Option<MemoryEntry>;
         if let Some((of, _)) = duplicate_of {
@@ -275,7 +341,7 @@ impl<'s> Pipeline<'s> {
                 &scope.user_id,
                 &scope.project,
                 session.unwrap_or(""),
-                importance.unwrap_or(self.opts.importance),
+                importance,
                 status,
                 provenance,
             )?;
@@ -335,6 +401,304 @@ impl<'s> Pipeline<'s> {
         }
 
         Ok(RememberReport { extracted, compared, resolved, decision, written })
+    }
+
+    // ---- sqlite-first path ----
+    //
+    // Every remember is first a SQLite row (`memory_intake`); the fact goes
+    // through GLiNER, is staged into the extension-convention `node_*` /
+    // `rel_*` tables, and a sync tick replicates it into the Ladybug graph.
+
+    /// Explicit remember through SQLite: intake -> GLiNER -> stage -> sync.
+    /// Returns per-fact reports plus the sync tick stats.
+    pub fn remember_via_sqlite(
+        &self,
+        extractor: &mut dyn Extractor,
+        intake: &crate::sqlite_sync::IntakeDb,
+        text: &str,
+        scope: &Scope,
+        importance: Option<i64>,
+        provenance: Provenance,
+        extension: Option<crate::sqlite_sync::ExtensionSource<'_>>,
+    ) -> Result<(Vec<RememberReport>, crate::sqlite_sync::SyncStats)> {
+        let facts = self.extract_facts(extractor, text, false)?;
+        let staged = self.stage_facts(extractor, intake, facts, scope, importance, provenance)?;
+        let stats = self.sync_intake(intake, extension)?;
+        // The tick just wrote the staged facts; attach them so the reports
+        // match the direct path shape.
+        let reports = self.attach_staged_writes(intake, staged)?;
+        Ok((reports, stats))
+    }
+
+    /// Auto-capture through SQLite: distill to one fact per entity-bearing
+    /// sentence, then stage + sync like `remember_via_sqlite`.
+    pub fn remember_auto_via_sqlite(
+        &self,
+        extractor: &mut dyn Extractor,
+        intake: &crate::sqlite_sync::IntakeDb,
+        text: &str,
+        scope: &Scope,
+        provenance: Provenance,
+        extension: Option<crate::sqlite_sync::ExtensionSource<'_>>,
+    ) -> Result<(Vec<RememberReport>, crate::sqlite_sync::SyncStats)> {
+        let facts = self.extract_facts(extractor, text, true)?;
+        let mut prov = provenance;
+        prov.auto_captured = true;
+        let staged = self.stage_facts(extractor, intake, facts, scope, None, prov)?;
+        let stats = self.sync_intake(intake, extension)?;
+        let reports = self.attach_staged_writes(intake, staged)?;
+        Ok((reports, stats))
+    }
+
+    /// Stage each planned fact; returns `(report, intake_id)` pairs so the
+    /// post-sync attach can resolve the written native rows.
+    fn stage_facts(
+        &self,
+        extractor: &mut dyn Extractor,
+        intake: &crate::sqlite_sync::IntakeDb,
+        facts: Vec<(String, Vec<ScoredMention>)>,
+        scope: &Scope,
+        importance: Option<i64>,
+        provenance: Provenance,
+    ) -> Result<Vec<(RememberReport, i64)>> {
+        let known: Vec<KnownEntity> = self.store.list_entities()?;
+        let mut known = known;
+        let mut staged = Vec::new();
+        for (fact_text, extracted) in facts {
+            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known)?;
+            // stage_plan returns the report (`written: None` for
+            // replicated facts) plus its intake id; the attach step resolves
+            // the native row after the sync tick.
+            let (report, intake_id) = self.stage_plan(intake, plan, scope, &provenance, &mut known)?;
+            staged.push((report, intake_id));
+        }
+        Ok(staged)
+    }
+
+    /// Stage one planned fact into SQLite: intake row, `node_*` / `rel_*`
+    /// rows, outcome + provenance side rows. Duplicate decisions stage no
+    /// graph rows — the strengthening touch applies live (idempotent under
+    /// cursor-gated replay) and is recorded in the outcome row.
+    /// Returns the report (`written` filled for duplicates; `None` for
+    /// replicated facts until the sync tick) plus its intake id.
+    fn stage_plan(
+        &self,
+        intake: &crate::sqlite_sync::IntakeDb,
+        plan: FactPlan,
+        scope: &Scope,
+        provenance: &Provenance,
+        known: &mut Vec<KnownEntity>,
+    ) -> Result<(RememberReport, i64)> {
+        let FactPlan {
+            fact_text,
+            extracted,
+            compared,
+            resolved,
+            category,
+            status,
+            decision,
+            conflicts,
+            duplicate_of,
+            importance,
+        } = plan;
+        let session = scope.session_id.as_deref().unwrap_or("");
+        let intake_id = intake.append_intake(&fact_text, &scope.user_id, &scope.project, session, importance)?;
+        let prov_json = serde_json::to_value(provenance).unwrap_or(serde_json::Value::Null);
+        let mut report = RememberReport { extracted, compared, resolved, decision, written: None };
+        if let Some((of, similarity)) = duplicate_of {
+            // No live write: the sync tick owns the strengthening touch
+            // (embedded applier, or the extension pre-pass below), so a
+            // cursor-gated replay can converge instead of double-counting.
+            report.written = self.store.get_memory(of)?;
+            intake.record_outcome(
+                intake_id,
+                &serde_json::json!({"kind": "duplicate", "of": of, "similarity": similarity}).to_string(),
+            )?;
+            return Ok((report, intake_id));
+        }
+        let fact_idx = 0;
+        let staged_mem = intake.stage_memory(
+            intake_id,
+            fact_idx,
+            &fact_text,
+            category.as_str(),
+            &scope.user_id,
+            &scope.project,
+            session,
+            importance,
+            status.as_str(),
+        )?;
+        intake.record_provenance(intake_id, fact_idx, &prov_json.to_string())?;
+        // Stage entities (known graph nodes keep their native id so both
+        // appliers converge; new ones take staging ids, backfilled on sync).
+        // normalized name-or-alias -> staging id.
+        let mut node_of: HashMap<String, i64> = HashMap::new();
+        let mut entity_ids: Vec<i64> = Vec::new();
+        for r in &report.resolved {
+            let aliases_json =
+                serde_json::to_string(&r.aliases).unwrap_or_else(|_| "[]".to_string());
+            let staged = intake.stage_entity(intake_id, &r.canonical, &r.entity_type, &aliases_json, r.id)?;
+            entity_ids.push(staged);
+            if r.id.is_none() {
+                // New canonical name; later facts in this call reuse it.
+                known.push(KnownEntity {
+                    id: staged,
+                    canonical: r.canonical.clone(),
+                    normalized: crate::resolve::normalize(&r.canonical),
+                    entity_type: r.entity_type.clone(),
+                    alias_normalized: r.aliases.iter().map(|a| crate::resolve::normalize(a)).collect(),
+                    aliases: r.aliases.clone(),
+                });
+            }
+            node_of.insert(crate::resolve::normalize(&r.canonical), staged);
+            for a in &r.aliases {
+                node_of.entry(crate::resolve::normalize(a)).or_insert(staged);
+            }
+        }
+        for c in &report.compared {
+            if let Some(staged) = node_of.get(&c.normalized) {
+                intake.stage_mention(
+                    intake_id,
+                    *staged,
+                    staged_mem,
+                    &c.mention.text,
+                    c.mention.confidence as f64,
+                    c.mention.start as i64,
+                    c.mention.end as i64,
+                )?;
+            }
+        }
+        for a in 0..entity_ids.len() {
+            for b in (a + 1)..entity_ids.len() {
+                intake.stage_cooccur(intake_id, entity_ids[a], entity_ids[b], 0.5)?;
+            }
+        }
+        for (old, old_cues) in &conflicts {
+            let cues_json = serde_json::to_string(old_cues).unwrap_or_else(|_| "[]".to_string());
+            intake.stage_conflict(intake_id, staged_mem, *old, &cues_json)?;
+        }
+        intake.record_outcome(
+            intake_id,
+            &serde_json::json!({"kind": "written", "status": status.as_str()}).to_string(),
+        )?;
+        Ok((report, intake_id))
+    }
+
+    /// One replication tick over `intake`: the `sqlite` extension when
+    /// `extension` is given and healthy, else the embedded applier.
+    /// Extension errors fall back to embedded (reported in `via`) so a
+    /// failed INSTALL/LOAD/sync never loses a remember.
+    pub fn sync_intake(
+        &self,
+        intake: &crate::sqlite_sync::IntakeDb,
+        extension: Option<crate::sqlite_sync::ExtensionSource<'_>>,
+    ) -> Result<crate::sqlite_sync::SyncStats> {
+        if intake.pending_count()? == 0 {
+            return Ok(crate::sqlite_sync::SyncStats {
+                tables_synced: 0,
+                rows_upserted: 0,
+                rows_deleted: 0,
+                applied_intake: 0,
+                status: "caught up".into(),
+                via: "none".into(),
+            });
+        }
+        if let Some(source) = extension {
+            match self.sync_via_extension(intake, source) {
+                Ok(stats) => return Ok(stats),
+                Err(e) => {
+                    let mut stats = crate::sqlite_sync::replicate_to_store(intake, self.store)?;
+                    stats.via = format!("embedded(fallback after extension error: {e:#})");
+                    return Ok(stats);
+                }
+            }
+        }
+        crate::sqlite_sync::replicate_to_store(intake, self.store)
+    }
+
+    /// Replicate via the C++ `sqlite` extension: LOAD + explicit label
+    /// remapping + `CALL sqlite_sync`. No writes happen here in Rust; the
+    /// engine tails the SQLite WAL and applies row ops itself.
+    ///
+    /// Post-tick bookkeeping keeps the two appliers coherent: under the
+    /// extension's MERGE-by-PK semantics a staged row's native id *is* its
+    /// staging id, so `lb_id` backfill is exact and the intake cursor can
+    /// advance past the converged intakes.
+    pub fn sync_via_extension(
+        &self,
+        intake: &crate::sqlite_sync::IntakeDb,
+        source: crate::sqlite_sync::ExtensionSource<'_>,
+    ) -> Result<crate::sqlite_sync::SyncStats> {
+        if intake.path() == ":memory:" {
+            anyhow::bail!("the sqlite extension needs a file-backed intake database");
+        }
+        match source {
+            crate::sqlite_sync::ExtensionSource::Repo => self.store.ensure_sqlite_extension()?,
+            crate::sqlite_sync::ExtensionSource::File(path) => self.store.load_sqlite_extension(path)?,
+        }
+        let _statuses = self.store.sqlite_register_all(intake.path())?;
+        // Duplicate outcomes carry no graph rows; apply their strengthening
+        // touches in Rust so both appliers converge identically.
+        for intake_id in intake.pending_intake_ids()? {
+            if let Some((kind, of)) = intake.outcome(intake_id)? {
+                if kind == "duplicate" {
+                    if let Some(of) = of {
+                        let _ = self.store.touch_memory(of, 1);
+                    }
+                }
+            }
+        }
+        let (tables, upserted, deleted, _applied_frames, status) =
+            self.store.sqlite_sync_tick(intake.path())?;
+        let pending = intake.pending_intake_ids()?;
+        for intake_id in &pending {
+            intake.backfill_extension_ids(*intake_id)?;
+        }
+        if let Some(last) = pending.last() {
+            intake.mark_applied(*last)?;
+        }
+        Ok(crate::sqlite_sync::SyncStats {
+            tables_synced: tables,
+            rows_upserted: upserted,
+            rows_deleted: deleted,
+            applied_intake: pending.len() as i64,
+            status,
+            via: "extension".into(),
+        })
+    }
+
+    /// Fill `written` on staged reports after a sync tick by reading back
+    /// the native rows through the intake side-map. Duplicate reports
+    /// already carry their strengthened entry from staging time.
+    fn attach_staged_writes(
+        &self,
+        intake: &crate::sqlite_sync::IntakeDb,
+        staged: Vec<(RememberReport, i64)>,
+    ) -> Result<Vec<RememberReport>> {
+        let mut reports = Vec::with_capacity(staged.len());
+        for (mut report, intake_id) in staged {
+            if report.written.is_none() {
+                let ids = intake.staged_memory_lb_ids(intake_id)?;
+                // One memory per intake row in the current staging shape;
+                // take the first converged row.
+                for id in ids {
+                    if let Some(entry) = self.store.get_memory(id)? {
+                        report.written = Some(entry);
+                        break;
+                    }
+                }
+            } else if let Some((kind, _)) = intake.outcome(intake_id)? {
+                if kind == "duplicate" {
+                    // Re-read: the sync tick applied the strengthening touch
+                    // after staging snapshotted the entry.
+                    if let Some(current) = report.written.as_ref().and_then(|w| self.store.get_memory(w.id).ok().flatten()) {
+                        report.written = Some(current);
+                    }
+                }
+            }
+            reports.push(report);
+        }
+        Ok(reports)
     }
 
     // ---- read paths ----

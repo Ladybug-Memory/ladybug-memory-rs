@@ -211,3 +211,263 @@ fn auto_drops_acknowledgments() {
     assert_eq!(reports.len(), 1);
     assert!(reports[0].written.as_ref().unwrap().content.contains("Python"));
 }
+
+#[cfg(feature = "test-support")]
+mod sqlite_first {
+    use super::*;
+    use lb_memory::sqlite_sync::IntakeDb;
+    use lb_memory::store::Store;
+
+    fn intake() -> IntakeDb {
+        IntakeDb::open_ephemeral().unwrap()
+    }
+
+    #[test]
+    fn sqlite_intake_replicates_new_fact() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let db = intake();
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("Tim Cook", "person", 0.99), mention("Apple", "organization", 0.98)],
+            classify_scores: vec![],
+        };
+        let (reports, stats) =
+            pipe.remember_via_sqlite(&mut ex, &db, "Tim Cook runs Apple.", &scope(), None, prov(), None).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(stats.via, "embedded");
+        assert_eq!(stats.applied_intake, 1);
+        let written = reports[0].written.as_ref().expect("sync must attach the written entry");
+        assert_eq!(written.status, MemoryStatus::Active);
+        assert_eq!(written.provenance.message_refs, vec!["msg-1".to_string()]);
+
+        // Same converged graph as the direct path.
+        let (mem, ent, men, rev) = store.counts().unwrap();
+        assert_eq!((mem, ent, men, rev), (1, 2, 2, 0));
+
+        // Cursor advanced; nothing pending.
+        assert_eq!(db.pending_count().unwrap(), 0);
+        assert_eq!(db.cursor().unwrap(), 1);
+
+        // Recall finds it.
+        let hits = pipe.recall("tim cook", &scope(), 5).unwrap();
+        assert!(!hits.is_empty());
+    }
+
+    #[test]
+    fn sqlite_sync_is_idempotent() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let db = intake();
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("Python", "technology", 0.95)],
+            classify_scores: vec![],
+        };
+        let (_, first) =
+            pipe.remember_via_sqlite(&mut ex, &db, "User prefers Python for scripting.", &scope(), None, prov(), None)
+                .unwrap();
+        assert_eq!(first.applied_intake, 1);
+        // Second tick converges with nothing to do.
+        let second = pipe.sync_intake(&db, None).unwrap();
+        assert_eq!(second.applied_intake, 0);
+        let (mem, _, _, _) = store.counts().unwrap();
+        assert_eq!(mem, 1);
+    }
+
+    #[test]
+    fn sqlite_duplicate_strengthens() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let db = intake();
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("Python", "technology", 0.95)],
+            classify_scores: vec![],
+        };
+        let (first, _) =
+            pipe.remember_via_sqlite(&mut ex, &db, "User prefers Python for scripting.", &scope(), None, prov(), None)
+                .unwrap();
+        let id = first[0].written.as_ref().unwrap().id;
+        let (second, _) =
+            pipe.remember_via_sqlite(&mut ex, &db, "User prefers Python for scripting tasks.", &scope(), None, prov(), None)
+                .unwrap();
+        assert!(matches!(second[0].decision, FactDecision::Duplicate { .. }));
+        let (mem, _, _, _) = store.counts().unwrap();
+        assert_eq!(mem, 1, "duplicate must not add a node");
+        // Touched once at stage time (+1 over the insert default of 5).
+        assert_eq!(store.get_memory(id).unwrap().unwrap().importance, 6);
+    }
+
+    #[test]
+    fn sqlite_conflict_goes_to_review() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let db = intake();
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("Python", "technology", 0.95)],
+            classify_scores: vec![],
+        };
+        pipe
+            .remember_via_sqlite(&mut ex, &db, "User prefers Python for scripting.", &scope(), None, prov(), None)
+            .unwrap();
+        let (reports, _) =
+            pipe.remember_via_sqlite(&mut ex, &db, "User hates Python for scripting.", &scope(), None, prov(), None)
+                .unwrap();
+        let written = reports[0].written.as_ref().unwrap();
+        assert_eq!(written.status, MemoryStatus::NeedsReview);
+        assert_eq!(store.conflicts_of(written.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sqlite_file_backed_intake_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("mem.lbdb").display().to_string();
+        let store = Store::open(&db_path).unwrap();
+        let db = store.intake_db().unwrap();
+        assert!(db.path().ends_with("mem.intake.sqlite"), "got {}", db.path());
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("LadybugDB", "technology", 0.9)],
+            classify_scores: vec![],
+        };
+        let (reports, stats) =
+            pipe.remember_via_sqlite(&mut ex, &db, "LadybugDB is a graph database.", &scope(), None, prov(), None)
+                .unwrap();
+        assert_eq!(stats.via, "embedded");
+        assert!(reports[0].written.is_some());
+        // WAL mode is on so the C++ tailer can replicate from this file.
+        let journal: String = db
+            .path()
+            .to_string();
+        assert!(std::path::Path::new(&journal).exists());
+        let (mem, ent, _, _) = store.counts().unwrap();
+        assert_eq!((mem, ent), (1, 1));
+    }
+
+    #[test]
+    fn sqlite_fallback_converges_partial_extension_tick() {
+        // The extension applies statement-by-statement, so a failed tick can
+        // leave committed node rows behind (observed: nodes land, then the
+        // edge batch fails on `_sqlite_rowid`). The fallback must reuse those
+        // rows, not twin them.
+        use lb_memory::types::{Category, MemoryStatus};
+        let store = Store::ephemeral().unwrap();
+        let db = IntakeDb::open_ephemeral().unwrap();
+        let intake_id = db.append_intake("Ada Lovelace wrote the first algorithm.", "u", "p", "", 5).unwrap();
+        let staged_mem = db
+            .stage_memory(intake_id, 0, "Ada Lovelace wrote the first algorithm.", "technical", "u", "p", "", 5, "active")
+            .unwrap();
+        let staged_ent = db.stage_entity(intake_id, "Ada Lovelace", "person", r#"["Ada Lovelace"]"#, None).unwrap();
+        db.stage_mention(intake_id, staged_ent, staged_mem, "Ada Lovelace", 1.0, 0, 12).unwrap();
+        db.record_provenance(intake_id, 0, "{}").unwrap();
+        db.record_outcome(intake_id, r#"{"kind":"written","status":"active"}"#).unwrap();
+        // Simulate the extension's committed rows from a tick that failed later.
+        let mid = store
+            .insert_memory(
+                "Ada Lovelace wrote the first algorithm.",
+                Category::Technical,
+                "u",
+                "p",
+                "",
+                5,
+                MemoryStatus::Active,
+                &Provenance::default(),
+            )
+            .unwrap();
+        let (eid, _) = store.upsert_entity("Ada Lovelace", "person", &["Ada Lovelace".to_string()], None).unwrap();
+        store.link_mention(eid, mid, "Ada Lovelace", 1.0, 0, 12).unwrap();
+
+        let stats = lb_memory::sqlite_sync::replicate_to_store(&db, &store).unwrap();
+        assert_eq!(stats.applied_intake, 1);
+        let (mem, ent, men, _) = store.counts().unwrap();
+        assert_eq!((mem, ent, men), (1, 1, 1), "no twins from the partial tick");
+        assert_eq!(db.pending_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn extension_tick_never_leaves_partial_state() {
+        // No partial state, ever, whichever extension build is under test:
+        // - pre-fix builds fail the tick on the `_sqlite_rowid` slot the
+        //   pre-existing rel tables lack; per-commit transactions must leave
+        //   zero rows behind (pre-tx-fix, nodes committed before the edge
+        //   failure: (1, 1, 0));
+        // - fixed builds replicate the whole batch (1, 1, 1).
+        // Testing-only path: explicit `LOAD EXTENSION '<path>'`.
+        // Set LB_SQLITE_EXTENSION to a built libsqlite.lbug_extension.
+        let ext = match std::env::var("LB_SQLITE_EXTENSION") {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("skip: LB_SQLITE_EXTENSION unset");
+                return;
+            }
+        };
+        use lb_memory::sqlite_sync::ExtensionSource;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("t.lbdb").to_str().unwrap()).unwrap();
+        let db = store.intake_db().unwrap();
+        assert_ne!(db.path(), ":memory:");
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let intake_id = db.append_intake("Ada wrote the algorithm.", "u", "p", "", 5).unwrap();
+        let staged_mem = db.stage_memory(intake_id, 0, "Ada wrote the algorithm.", "technical", "u", "p", "", 5, "active").unwrap();
+        let staged_ent = db.stage_entity(intake_id, "Ada", "person", r#"["Ada"]"#, None).unwrap();
+        db.stage_mention(intake_id, staged_ent, staged_mem, "Ada", 1.0, 0, 3).unwrap();
+        db.record_provenance(intake_id, 0, "{}").unwrap();
+        db.record_outcome(intake_id, r#"{"kind":"written","status":"active"}"#).unwrap();
+
+        match pipe.sync_via_extension(&db, ExtensionSource::File(&ext)) {
+            Ok(stats) => {
+                assert_eq!(stats.via, "extension");
+                assert_eq!(store.counts().unwrap(), (1, 1, 1, 0));
+                assert_eq!(db.pending_count().unwrap(), 0);
+            }
+            Err(e) => {
+                assert!(format!("{e:#}").contains("_sqlite_rowid"), "unexpected error: {e:#}");
+                assert_eq!(store.counts().unwrap(), (0, 0, 0, 0), "failed tick must be atomic");
+                // And the embedded tick still converges afterwards.
+                let stats = pipe.sync_intake(&db, None).unwrap();
+                assert_eq!(stats.applied_intake, 1);
+                assert_eq!(store.counts().unwrap().0, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn extension_tick_commits_clean_batches() {
+        // Nodes-only staging has no edge statements, so the extension tick
+        // succeeds: proves the COMMIT path of the per-batch transactions.
+        let ext = match std::env::var("LB_SQLITE_EXTENSION") {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("skip: LB_SQLITE_EXTENSION unset");
+                return;
+            }
+        };
+        use lb_memory::sqlite_sync::ExtensionSource;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("c.lbdb").to_str().unwrap()).unwrap();
+        let db = store.intake_db().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let intake_id = db.append_intake("Ada wrote the algorithm.", "u", "p", "", 5).unwrap();
+        db.stage_memory(intake_id, 0, "Ada wrote the algorithm.", "technical", "u", "p", "", 5, "active").unwrap();
+        db.record_provenance(intake_id, 0, "{}").unwrap();
+        db.record_outcome(intake_id, r#"{"kind":"written","status":"active"}"#).unwrap();
+
+        let stats = pipe.sync_via_extension(&db, ExtensionSource::File(&ext)).unwrap();
+        assert_eq!(stats.via, "extension");
+        assert_eq!(stats.applied_intake, 1);
+        assert_eq!(db.pending_count().unwrap(), 0);
+        assert_eq!(store.counts().unwrap().0, 1);
+    }
+
+    #[test]
+    fn sqlite_quarantine_stays_hidden() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let db = intake();
+        let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![] };
+        let (reports, _) =
+            pipe.remember_via_sqlite(&mut ex, &db, "Hmm, vague rambling without names.", &scope(), None, prov(), None)
+                .unwrap();
+        assert!(matches!(reports[0].decision, FactDecision::LowConfidence { .. }));
+        assert_eq!(reports[0].written.as_ref().unwrap().status, MemoryStatus::Quarantined);
+        assert!(pipe.recall("rambling", &scope(), 5).unwrap().is_empty());
+    }
+}
