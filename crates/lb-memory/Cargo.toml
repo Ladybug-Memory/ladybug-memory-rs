@@ -7,12 +7,13 @@ license.workspace = true
 
 [dependencies]
 gliner-onnx.path = "../gliner-onnx"
-lbug.version = "0.21.2"
+lbug.version = "0.22.3"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.11"
 time = { version = "0.3", features = ["formatting", "parsing"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"
