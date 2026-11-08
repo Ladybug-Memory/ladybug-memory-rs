@@ -629,8 +629,22 @@ impl GlinerOnnx {
         relations: &[RelationSpec],
         threshold: f32,
     ) -> Result<Vec<TypedRelation>> {
-        anyhow::ensure!(!relations.is_empty(), "no relation specs given");
         anyhow::ensure!(!entity_labels.is_empty(), "entity labels needed for endpoint typing");
+        // Open IE: no declared schema means one generic query over all
+        // entity types; phrases are mined from the between-span surface.
+        let open;
+        let relations = if relations.is_empty() {
+            open = vec![RelationSpec {
+                relation_type: OPEN_RELATION.to_string(),
+                head_types: entity_labels.to_vec(),
+                tail_types: entity_labels.to_vec(),
+                description: None,
+                allow_self: false,
+            }];
+            &open
+        } else {
+            relations
+        };
         let built = self.build_relation_inputs(text, entity_labels, relations)?;
         let Backend::Nico { model, heads } = &mut self.backend else {
             anyhow::bail!("relation scoring needs the single-graph export (onnx/model.onnx + onnx/heads.onnx)");
@@ -789,6 +803,7 @@ impl GlinerOnnx {
             }
             Some((t, cs, ce))
         };
+        let open_mode = relations.len() == 1 && relations[0].relation_type == OPEN_RELATION;
         let mut edges: Vec<(String, RelatedMention, RelatedMention, f32)> = Vec::new();
         for (i, p) in pairs.iter().enumerate() {
             let score = sigmoid(rel_logits[i] / RELATION_TEMPERATURE);
@@ -801,8 +816,16 @@ impl GlinerOnnx {
             };
             let (ht, hcs, hce) = hs;
             let (tt, tcs, tce) = he;
+            let rel_type = if open_mode {
+                match mine_relation_phrase(&chars, hcs, hce, tcs, tce) {
+                    Some(phrase) => phrase,
+                    None => continue,
+                }
+            } else {
+                relations[p.rel].relation_type.clone()
+            };
             edges.push((
-                relations[p.rel].relation_type.clone(),
+                rel_type,
                 RelatedMention { text: ht, start: hcs, end: hce, confidence: p.hp },
                 RelatedMention { text: tt, start: tcs, end: tce, confidence: p.tp },
                 score,
@@ -973,6 +996,11 @@ pub struct RelatedMention {
     pub confidence: f32,
 }
 
+/// Generic relation for open information extraction: with no declared
+/// schema, all entity pairs are scored under one `related` query and the
+/// relation phrase is mined from the surface between the endpoint spans.
+pub const OPEN_RELATION: &str = "related";
+
 /// Checkpoint relation settings (`fastino/gliner2.5-base-v1` config):
 /// top-32 head/tail mentions per type at candidate prob >= 0.2,
 /// capped 64-pair cross product, sigmoid temperature 1.0.
@@ -1009,6 +1037,53 @@ fn select_roles(cands: &[(usize, usize, f32, bool)], requested: usize) -> Vec<(u
         out.push((0, 0, 0.0, false));
     }
     out
+}
+
+/// Mine an open-IE relation phrase from the surface between two endpoint
+/// char spans (textual order): lowercase, trim edge punctuation, strip
+/// leading auxiliaries/determiners/relative pronouns ("was founded by" →
+/// "founded by", ", who runs" → "runs"). Returns None for overlapping
+/// spans, empty/pure-glue surfaces, or runaway (>40 char) spans.
+fn mine_relation_phrase(text: &[char], a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> Option<String> {
+    let (lo, hi) = if a_end <= b_start {
+        (a_end, b_start)
+    } else if b_end <= a_start {
+        (b_end, a_start)
+    } else {
+        return None;
+    };
+    if hi > text.len() || lo >= hi {
+        return None;
+    }
+    let raw: String = text[lo..hi].iter().collect();
+    let mut words: Vec<&str> = raw.split_whitespace().collect();
+    // Trim edge punctuation per word, drop empties.
+    let mut clean: Vec<String> = Vec::new();
+    for w in words.drain(..) {
+        let t = w.trim_matches(|c: char| c.is_ascii_punctuation());
+        if !t.is_empty() {
+            clean.push(t.to_lowercase());
+        }
+    }
+    // Strip leading glue (auxiliaries, determiners, relative pronouns).
+    const LEAD_GLUE: &[&str] =
+        &["was", "were", "is", "are", "be", "been", "being", "has", "have", "had", "the", "a", "an", "that", "which", "who", "whom", "whose"];
+    while clean.len() > 1 && LEAD_GLUE.contains(&clean[0].as_str()) {
+        clean.remove(0);
+    }
+    if clean.is_empty() {
+        return None;
+    }
+    const PURE_GLUE: &[&str] =
+        &["and", "or", "with", "of", "the", "a", "an", "to", "in", "on", "for", "by", "at", "from", "as", "s", "t", "m", "re", "ll", "d", "ve"];
+    if clean.len() == 1 && PURE_GLUE.contains(&clean[0].as_str()) {
+        return None;
+    }
+    let phrase = clean.join(" ");
+    if phrase.len() > 40 {
+        return None;
+    }
+    Some(phrase)
 }
 
 /// Longest-span canonicalization + exact-dup max, mirroring torch's
