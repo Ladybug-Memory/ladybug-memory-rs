@@ -351,6 +351,68 @@ impl GlinerOnnx {
         Ok(built)
     }
 
+    /// Prompt with entity labels plus one `( [P] type ( [R] head [R] tail ) )`
+    /// block per relation, in declaration order (mirrors torch schema order:
+    /// relation `r` owns role markers `2r` (head) and `2r+1` (tail)).
+    pub fn build_relation_inputs(
+        &self,
+        text: &str,
+        entity_labels: &[String],
+        relations: &[RelationSpec],
+    ) -> Result<BuiltInputs> {
+        let normalized = Self::normalize(text);
+        let words = self.splitter.split(&normalized);
+        let mut segs: Vec<(String, SegKind)> = vec![
+            ("(".to_string(), SegKind::Plain),
+            ("[P]".to_string(), SegKind::P),
+            ("entities".to_string(), SegKind::Plain),
+            ("(".to_string(), SegKind::Plain),
+        ];
+        for lb in entity_labels {
+            segs.push(("[E]".to_string(), SegKind::Query));
+            segs.push((lb.clone(), SegKind::Plain));
+        }
+        segs.push((")".to_string(), SegKind::Plain));
+        segs.push((")".to_string(), SegKind::Plain));
+        for rel in relations {
+            let parent = match &rel.description {
+                Some(d) => format!("{}: {}", rel.relation_type, d),
+                None => rel.relation_type.clone(),
+            };
+            segs.push(("(".to_string(), SegKind::Plain));
+            segs.push(("[P]".to_string(), SegKind::P));
+            segs.push((parent, SegKind::Plain));
+            segs.push(("(".to_string(), SegKind::Plain));
+            segs.push(("[R]".to_string(), SegKind::Role));
+            segs.push(("head".to_string(), SegKind::Plain));
+            segs.push(("[R]".to_string(), SegKind::Role));
+            segs.push(("tail".to_string(), SegKind::Plain));
+            segs.push((")".to_string(), SegKind::Plain));
+            segs.push((")".to_string(), SegKind::Plain));
+        }
+        segs.push(("[SEP_TEXT]".to_string(), SegKind::Plain));
+        for w in &words {
+            segs.push((w.lowered.clone(), SegKind::Word));
+        }
+        let mut built = self.assemble(segs, words, normalized, self.markers.e)?;
+        anyhow::ensure!(
+            built.query_pos.len() == entity_labels.len(),
+            "found {} entity markers for {} labels",
+            built.query_pos.len(),
+            entity_labels.len()
+        );
+        anyhow::ensure!(
+            built.rel_pos.len() == 2 * relations.len(),
+            "found {} role markers for {} relations",
+            built.rel_pos.len(),
+            relations.len()
+        );
+        // Silence the shared helper's query-count check for the entity path:
+        // labels were validated above.
+        let _ = &mut built;
+        Ok(built)
+    }
+
     /// Encode schema segments, tracking `[P]`/`[E]`/`[L]`/`[R]`/word routing
     /// by segment kind instead of position arithmetic (multi-block prompts).
     fn assemble(
@@ -548,6 +610,207 @@ impl GlinerOnnx {
         Ok(Extraction { normalized_text: built.normalized, mentions, null_probs })
     }
 
+    /// Jointly extract typed relation edges for `relations` over `text`.
+    ///
+    /// One `model.onnx` pass (entities + `[R]` role states), a Rust port of
+    /// torch's `TypedRelationPairGenerator` (top-32 head/tail mentions per
+    /// type at candidate prob >= 0.2, capped 64-pair cross product), one
+    /// `heads.onnx` (`SparseRelationScorer`) pass, then sigmoid decode with
+    /// per-type thresholding and longest-span dedup — mirroring
+    /// `BoundaryExtractor._decode_relations` (`relation_temperature = 1.0`,
+    /// directional role states, `allow_self` per spec).
+    ///
+    /// Requires the single-graph export (`supports_relations`); the DanKau
+    /// 3-graph split has no scorer graph.
+    pub fn extract_relations(
+        &mut self,
+        text: &str,
+        entity_labels: &[String],
+        relations: &[RelationSpec],
+        threshold: f32,
+    ) -> Result<Vec<TypedRelation>> {
+        anyhow::ensure!(!relations.is_empty(), "no relation specs given");
+        anyhow::ensure!(!entity_labels.is_empty(), "entity labels needed for endpoint typing");
+        let built = self.build_relation_inputs(text, entity_labels, relations)?;
+        let Backend::Nico { model, heads } = &mut self.backend else {
+            anyhow::bail!("relation scoring needs the single-graph export (onnx/model.onnx + onnx/heads.onnx)");
+        };
+        let seq_len = built.input_ids.len();
+        let n_words = built.words.len();
+        let n_ent = entity_labels.len();
+        let n_rel = relations.len();
+
+        let input_ids = Tensor::from_array((vec![1, seq_len as i64], built.input_ids.clone()))?.upcast();
+        let attention_mask = Tensor::from_array((vec![1, seq_len as i64], vec![1i64; seq_len]))?.upcast();
+        let word_idx: Vec<i64> = built.word_first.iter().map(|&p| p as i64).collect();
+        let query_idx: Vec<i64> = built.query_pos.iter().map(|&p| p as i64).collect();
+        let role_idx: Vec<i64> = built.rel_pos.iter().map(|&p| p as i64).collect();
+        let mouts = model.run(ort::inputs![
+            "input_ids" => input_ids,
+            "attention_mask" => attention_mask,
+            "text_word_indices" => Tensor::from_array((vec![1, n_words as i64], word_idx))?.upcast(),
+            "text_word_mask" => Tensor::from_array((vec![1, n_words as i64], vec![1.0f32; n_words]))?.upcast(),
+            "query_marker_indices" => Tensor::from_array((vec![1, n_ent as i64], query_idx))?.upcast(),
+            "query_marker_mask" => Tensor::from_array((vec![1, n_ent as i64], vec![1.0f32; n_ent]))?.upcast(),
+            "cls_marker_indices" => Tensor::from_array((vec![1, 1i64], vec![0i64]))?.upcast(),
+            "cls_marker_mask" => Tensor::from_array((vec![1, 1i64], vec![0.0f32]))?.upcast(),
+            "rel_marker_indices" => Tensor::from_array((vec![1, 2 * n_rel as i64], role_idx))?.upcast(),
+            "rel_marker_mask" => Tensor::from_array((vec![1, 2 * n_rel as i64], vec![1.0f32; 2 * n_rel]))?.upcast()
+        ])?;
+
+        // Entity candidates: (span, prob) per [E] query for endpoint typing.
+        let (_, pair_logits) = mouts["pair_logits"].try_extract_tensor::<f32>()?;
+        let (_, pair_indices) = mouts["pair_indices"].try_extract_tensor::<i64>()?;
+        let (_, pair_valid_u8) = mouts["pair_valid"].try_extract_tensor::<u8>()?;
+        let (_, text_states) = mouts["text_states"].try_extract_tensor::<f32>()?;
+        let (_, role_states) = mouts["rel_role_states"].try_extract_tensor::<f32>()?;
+        let pool = pair_logits.len() / n_ent.max(1);
+        // Per-query candidate lists (torch: flat over queries x candidates).
+        let mut cands: Vec<Vec<(usize, usize, f32, bool)>> = vec![Vec::new(); n_ent];
+        for qi in 0..n_ent {
+            for c in 0..pool {
+                let k = qi * pool + c;
+                let s = pair_indices[k * 2] as usize;
+                let e = pair_indices[k * 2 + 1] as usize;
+                let p = sigmoid(pair_logits[k]);
+                let v = pair_valid_u8[k] != 0;
+                cands[qi].push((s, e, p, v));
+            }
+        }
+        // label -> [E] query index.
+        let qid_of = |name: &str| entity_labels.iter().position(|l| l == name);
+
+        #[derive(Clone)]
+        struct Pair {
+            rel: usize,
+            hs: usize,
+            he: usize,
+            ts: usize,
+            te: usize,
+            hp: f32,
+            tp: f32,
+        }
+        let mut pairs: Vec<Pair> = Vec::new();
+        for (ri, spec) in relations.iter().enumerate() {
+            let hqs: Vec<usize> = spec.head_types.iter().filter_map(|t| qid_of(t)).collect();
+            let tqs: Vec<usize> = spec.tail_types.iter().filter_map(|t| qid_of(t)).collect();
+            if hqs.is_empty() || tqs.is_empty() {
+                continue;
+            }
+            // Flattened candidate pools over the allowed queries, mirroring
+            // torch's query-masked flat selection (order: query-major).
+            let mut hpool: Vec<(usize, usize, f32, bool)> = Vec::new();
+            let mut tpool: Vec<(usize, usize, f32, bool)> = Vec::new();
+            for &q in &hqs {
+                hpool.extend(cands[q].iter().cloned());
+            }
+            for &q in &tqs {
+                tpool.extend(cands[q].iter().cloned());
+            }
+            let heads = select_roles(&hpool, HEADS_PER_RELATION);
+            let tails = select_roles(&tpool, TAILS_PER_RELATION);
+            // Capped cross product, best hp*tp first.
+            let mut cross: Vec<(f32, usize, usize)> = Vec::new();
+            for (hi, h) in heads.iter().enumerate() {
+                for (ti, t) in tails.iter().enumerate() {
+                    if !h.3 || !t.3 {
+                        continue;
+                    }
+                    let same = h.0 == t.0 && h.1 == t.1;
+                    if same && !spec.allow_self {
+                        continue;
+                    }
+                    cross.push((h.2 * t.2, hi, ti));
+                }
+            }
+            cross.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            cross.truncate(PAIR_CAP);
+            for (_, hi, ti) in cross {
+                let h = &heads[hi];
+                let t = &tails[ti];
+                pairs.push(Pair {
+                    rel: ri,
+                    hs: h.0,
+                    he: h.1,
+                    ts: t.0,
+                    te: t.1,
+                    hp: h.2,
+                    tp: t.2,
+                });
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+        let np = pairs.len();
+
+        // Relation states: concat(head_role, tail_role) per type
+        // (directional_relation_states = true on this checkpoint → 1536-d).
+        let mut rel_states = vec![0f32; n_rel * 1536];
+        for (ri, dst) in rel_states.chunks_mut(1536).enumerate() {
+            let h = &role_states[(2 * ri) * 768..(2 * ri + 1) * 768];
+            let t = &role_states[(2 * ri + 1) * 768..(2 * ri + 2) * 768];
+            dst[..768].copy_from_slice(h);
+            dst[768..].copy_from_slice(t);
+        }
+        let head_start: Vec<i64> = pairs.iter().map(|p| p.hs as i64).collect();
+        let head_end: Vec<i64> = pairs.iter().map(|p| p.he as i64).collect();
+        let tail_start: Vec<i64> = pairs.iter().map(|p| p.ts as i64).collect();
+        let tail_end: Vec<i64> = pairs.iter().map(|p| p.te as i64).collect();
+        let rel_index: Vec<i64> = pairs.iter().map(|p| p.rel as i64).collect();
+        let houts = heads.run(ort::inputs![
+            "text_states" => Tensor::from_array((vec![1, n_words as i64, 768], text_states.to_vec()))?.upcast(),
+            "rel_states" => Tensor::from_array((vec![1, n_rel as i64, 1536], rel_states))?.upcast(),
+            "head_start" => Tensor::from_array((vec![1, np as i64], head_start))?.upcast(),
+            "head_end" => Tensor::from_array((vec![1, np as i64], head_end))?.upcast(),
+            "tail_start" => Tensor::from_array((vec![1, np as i64], tail_start))?.upcast(),
+            "tail_end" => Tensor::from_array((vec![1, np as i64], tail_end))?.upcast(),
+            "rel_index" => Tensor::from_array((vec![1, np as i64], rel_index))?.upcast(),
+            "pair_mask" => Tensor::from_array((vec![1, np as i64], vec![1.0f32; np]))?.upcast()
+        ])?;
+        let (_, rel_logits) = houts["rel_logits"].try_extract_tensor::<f32>()?;
+
+        // Decode: sigmoid(logit / temperature), threshold, bounds-check,
+        // longest-span canonicalization, exact-dup max.
+        let chars: Vec<char> = built.normalized.chars().collect();
+        let surf = |s: usize, e: usize| -> Option<(String, usize, usize)> {
+            if !(s < e && e <= n_words) {
+                return None;
+            }
+            let cs = built.starts[s];
+            let ce = built.ends[e - 1];
+            if ce > chars.len() || cs >= ce {
+                return None;
+            }
+            let t: String = chars[cs..ce].iter().collect();
+            let t = t.trim().to_string();
+            if t.is_empty() {
+                return None;
+            }
+            Some((t, cs, ce))
+        };
+        let mut edges: Vec<(String, RelatedMention, RelatedMention, f32)> = Vec::new();
+        for (i, p) in pairs.iter().enumerate() {
+            let score = sigmoid(rel_logits[i] / RELATION_TEMPERATURE);
+            if score < threshold {
+                continue;
+            }
+            let (hs, he) = match (surf(p.hs, p.he), surf(p.ts, p.te)) {
+                (Some(h), Some(t)) => (h, t),
+                _ => continue,
+            };
+            let (ht, hcs, hce) = hs;
+            let (tt, tcs, tce) = he;
+            edges.push((
+                relations[p.rel].relation_type.clone(),
+                RelatedMention { text: ht, start: hcs, end: hce, confidence: p.hp },
+                RelatedMention { text: tt, start: tcs, end: tce, confidence: p.tp },
+                score,
+            ));
+        }
+        Ok(dedup_relations(edges))
+    }
+
     /// Score `labels` for a classification `task` (e.g. sentiment, topic).
     ///
     /// One encoder pass over the `[L]` prompt, then a single `classifier.onnx`
@@ -662,6 +925,171 @@ pub struct BuiltInputs {
     pub rel_pos: Vec<usize>,
     pub starts: Vec<usize>,
     pub ends: Vec<usize>,
+}
+
+/// One relation type to score, with head/tail entity-type constraints.
+/// Zero-shot: any type name works; the scorer reads it from the `[P]` block
+/// through the contextualized `[R]` role states.
+#[derive(Debug, Clone)]
+pub struct RelationSpec {
+    pub relation_type: String,
+    pub head_types: Vec<String>,
+    pub tail_types: Vec<String>,
+    pub description: Option<String>,
+    pub allow_self: bool,
+}
+
+impl RelationSpec {
+    pub fn new(
+        relation_type: &str,
+        head_types: &[&str],
+        tail_types: &[&str],
+    ) -> Self {
+        Self {
+            relation_type: relation_type.to_string(),
+            head_types: head_types.iter().map(|s| s.to_string()).collect(),
+            tail_types: tail_types.iter().map(|s| s.to_string()).collect(),
+            description: None,
+            allow_self: false,
+        }
+    }
+}
+
+/// One scored typed edge.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TypedRelation {
+    pub relation_type: String,
+    pub head: RelatedMention,
+    pub tail: RelatedMention,
+    pub score: f32,
+}
+
+/// One endpoint of a typed edge.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelatedMention {
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+    pub confidence: f32,
+}
+
+/// Checkpoint relation settings (`fastino/gliner2.5-base-v1` config):
+/// top-32 head/tail mentions per type at candidate prob >= 0.2,
+/// capped 64-pair cross product, sigmoid temperature 1.0.
+const HEADS_PER_RELATION: usize = 32;
+const TAILS_PER_RELATION: usize = 32;
+const PAIR_CAP: usize = 64;
+const ARGUMENT_THRESHOLD: f32 = 0.2;
+const RELATION_TEMPERATURE: f32 = 1.0;
+
+/// Torch `generate_batched` role selection, decode-only path: stable order
+/// by (end, start), rank by score desc with below-threshold (`ARGUMENT_`
+/// `THRESHOLD`) and invalid slots floored, take exactly `requested` slots
+/// (padding invalid). Pair validity is enforced on the cross product.
+fn select_roles(cands: &[(usize, usize, f32, bool)], requested: usize) -> Vec<(usize, usize, f32, bool)> {
+    let n = cands.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| cands[a].1.cmp(&cands[b].1));
+    order.sort_by(|&a, &b| cands[a].0.cmp(&cands[b].0));
+    let score_of = |pos: usize| -> f32 {
+        let c = &cands[order[pos]];
+        if c.3 && c.2 >= ARGUMENT_THRESHOLD {
+            c.2
+        } else {
+            f32::NEG_INFINITY
+        }
+    };
+    let mut rank: Vec<usize> = (0..n).collect();
+    rank.sort_by(|&a, &b| score_of(b).partial_cmp(&score_of(a)).unwrap().then(a.cmp(&b)));
+    let mut out = Vec::with_capacity(requested);
+    for k in 0..requested.min(n) {
+        out.push(cands[order[rank[k]]]);
+    }
+    while out.len() < requested {
+        out.push((0, 0, 0.0, false));
+    }
+    out
+}
+
+/// Longest-span canonicalization + exact-dup max, mirroring torch's
+/// `_deduplicate_relation_edges` (overlap groups collapse to the longest
+/// containing mention; repeated (head, tail) pairs keep the best score).
+fn dedup_relations(
+    edges: Vec<(String, RelatedMention, RelatedMention, f32)>,
+) -> Vec<TypedRelation> {
+    use std::collections::HashMap;
+    // Group by type, preserving first-seen order.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<(RelatedMention, RelatedMention, f32)>> = HashMap::new();
+    for (ty, h, t, score) in edges {
+        groups.entry(ty.clone()).or_insert_with(|| {
+            order.push(ty.clone());
+            Vec::new()
+        }).push((h, t, score));
+    }
+    let canonical = |mentions: &[(RelatedMention, RelatedMention, f32)], side: usize| {
+        // side 0 = head, 1 = tail. For each mention, the longest container wins.
+        let mut canon: HashMap<(usize, usize), RelatedMention> = HashMap::new();
+        for e in mentions.iter() {
+            let m = if side == 0 { &e.0 } else { &e.1 };
+            canon.entry((m.start, m.end)).or_insert_with(|| m.clone());
+        }
+        let keys: Vec<(usize, usize)> = canon.keys().cloned().collect();
+        for (s, e) in &keys {
+            let mut best = canon[&(*s, *e)].clone();
+            for (cs, ce) in &keys {
+                if *cs <= *s && *ce >= *e {
+                    let cand = &canon[&(*cs, *ce)];
+                    if (ce - cs, std::cmp::Reverse(*cs)) > (best.end - best.start, std::cmp::Reverse(best.start)) {
+                        best = cand.clone();
+                    }
+                }
+            }
+            canon.insert((*s, *e), best);
+        }
+        canon
+    };
+    let mut out = Vec::new();
+    for ty in order {
+        let mut group = groups.remove(&ty).unwrap_or_default();
+        if group.is_empty() {
+            continue;
+        }
+        let head_canon = canonical(&mut group, 0);
+        let tail_canon = canonical(&mut group, 1);
+        // Exact (head, tail) duplicates keep the max score.
+        let mut exact: HashMap<(usize, usize, usize, usize), (RelatedMention, RelatedMention, f32)> =
+            HashMap::new();
+        for (h, t, score) in group {
+            let ch = head_canon.get(&(h.start, h.end)).cloned().unwrap_or(h);
+            let ct = tail_canon.get(&(t.start, t.end)).cloned().unwrap_or(t);
+            let key = (ch.start, ch.end, ct.start, ct.end);
+            exact
+                .entry(key)
+                .and_modify(|e| {
+                    if score > e.2 {
+                        *e = (ch.clone(), ct.clone(), score);
+                    }
+                })
+                .or_insert((ch, ct, score));
+        }
+        let mut deduped: Vec<(RelatedMention, RelatedMention, f32)> =
+            exact.into_values().collect();
+        deduped.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+        for (h, t, score) in deduped {
+            out.push(TypedRelation { relation_type: ty.clone(), head: h, tail: t, score });
+        }
+    }
+    // Deterministic global rank: -score, type, head start, tail start.
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap()
+            .then(a.relation_type.cmp(&b.relation_type))
+            .then(a.head.start.cmp(&b.head.start))
+            .then(a.tail.start.cmp(&b.tail.start))
+    });
+    out
 }
 
 /// `flat` overlap policy from `gliner2.inference.overlap.resolve_overlaps`:

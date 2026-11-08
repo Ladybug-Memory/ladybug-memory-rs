@@ -8,7 +8,7 @@ no torch at inference.
 
 | crate | what |
 |---|---|
-| `gliner-onnx` | GLiNER2.5 entity extraction on `DanKau/gliner2.5-base-v1-onnx` (ORT + `tokenizers`, parity-tested vs the python ONNX baseline) |
+| `gliner-onnx` | GLiNER2.5 entity extraction on the `nicolasembleton/gliner2.5-base-v1-onnx` single-graph export (ORT + `tokenizers`, parity-tested vs the python ONNX baseline; ships the `SparseRelationScorer` graph for typed relations) |
 | `lb-memory` | Memory API: 5-step pipeline over a LadybugDB entity graph (embedded, via the `lbug` crate) |
 | `lbm` | CLI with JSON I/O (`remember/search/forget/tour/status/review/sync`) — what pi extensions spawn |
 
@@ -39,9 +39,19 @@ export ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib   # 1.23+; the ladybug-memor
 # .venv/lib/python3.13/site-packages/onnxruntime/capi/
 
 cargo test --release -p lb-memory --features test-support
-cargo test --release -p gliner-onnx   # needs ORT_DYLIB_PATH + HF snapshot
+cargo test --release -p gliner-onnx   # needs ORT_DYLIB_PATH + the model snapshot below
 cargo build --release -p lbm
 ```
+
+The GLiNER snapshot resolves to `~/.cache/ladybug-memory/models/gliner2.5-base-v1-nico-onnx`
+(override with `LB_MEMORY_SNAPSHOT` / `--snapshot`): the `nicolasembleton`
+single-graph export of `fastino/gliner2.5-base-v1` (`onnx/model.onnx` —
+encoder + entity pair path + classifier + text/candidate/role states — plus
+`onnx/heads.onnx`, the `SparseRelationScorer`). The loader auto-detects the
+layout, so either export works, but the DanKau 3-graph split has no relation
+head. `extract_relations` (typed edges via `heads.onnx`, zero-shot relation
+types) is implemented and smoke-tested; pipeline wiring (typed `RelatesTo`
+instead of `coOccurs`) is next.
 
 The `lbug` crate (crates.io, `0.22.3`) links the **shared** prebuilt
 `liblbug.dylib` from a persistent cache (`~/.cache/lbug-shared-0.22.3`,
@@ -176,10 +186,10 @@ copied) and `skills/lb-memory/SKILL.md`.
   directions on 0.22.3 binding ↔ bundled CLI: no migration, no lockout.
   (Do not use the old `ladybug-rust` 0.18 checkout — different storage
   version.) Still prefer copies when experimenting on live files.
-- **Relations are co-occurrence** (`RelatesTo{coOccurs}`). The ONNX export has
-  no relation scorer (gliner2 scores relations in torch), so typed relations
-  need a separate export or the LLM fallback — same caveat as the python
-  package's next step.
+- **Relations are co-occurrence** (`RelatesTo{coOccurs}`) — for now.
+  `extract_relations` scores typed edges with the export's `SparseRelationScorer`
+  (`founder-of(Steve Jobs, Apple)` @ 0.97 in the smoke test); wiring them into
+  recall instead of `coOccurs` is the next step. LLM fallback stays an option.
 - Recall is entity-boosted FTS (porter stemmer) with an offline-safe
   substring fallback. No embedding/vector search yet; schema is
   forward-compatible (add an embedding column + index later).
