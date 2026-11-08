@@ -14,10 +14,7 @@ use std::collections::HashMap;
 
 fn snapshot_dir() -> String {
     std::env::var("GLINER_SNAPSHOT").unwrap_or_else(|_| {
-        format!(
-            "{}/.cache/huggingface/hub/models--DanKau--gliner2.5-base-v1-onnx/snapshots/b4920ab2b4f39b2da60c9761802e3d8cc6ec9993",
-            std::env::var("HOME").unwrap()
-        )
+        format!("{}/.cache/ladybug-memory/models/gliner2.5-base-v1-nico-onnx", std::env::var("HOME").unwrap())
     })
 }
 

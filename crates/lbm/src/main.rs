@@ -87,7 +87,7 @@ fn default_db() -> String {
 fn default_snapshot() -> String {
     std::env::var("LB_MEMORY_SNAPSHOT").unwrap_or_else(|_| {
         format!(
-            "{}/.cache/huggingface/hub/models--DanKau--gliner2.5-base-v1-onnx/snapshots/b4920ab2b4f39b2da60c9761802e3d8cc6ec9993",
+            "{}/.cache/ladybug-memory/models/gliner2.5-base-v1-nico-onnx",
             home()
         )
     })

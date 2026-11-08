@@ -44,12 +44,44 @@ use ort::session::Session;
 use regex::Regex;
 use tokenizers::Tokenizer;
 
-/// Special-token ids for this checkpoint (from `gliner2_config.json`).
+/// Special-token ids for the DanKau checkpoint (from `gliner2_config.json`).
 /// Do not hard-code the multilingual export's ids here — they differ.
+/// Prefer [`MarkerIds::resolve`] (per-snapshot, from its own tokenizer).
 pub const SEP_TEXT_ID: u32 = 128002;
 pub const P_ID: u32 = 128003;
 pub const E_ID: u32 = 128005;
 pub const L_ID: u32 = 128007;
+
+/// Special-token ids resolved from a snapshot's own tokenizer: exact for
+/// every export (DanKau, Nicolasembleton, multilingual), no hard-coding.
+#[derive(Debug, Clone, Copy)]
+pub struct MarkerIds {
+    pub sep_text: u32,
+    pub p: u32,
+    pub e: u32,
+    pub l: u32,
+    pub r: u32,
+}
+
+impl MarkerIds {
+    pub fn resolve(tokenizer: &Tokenizer) -> Result<Self> {
+        fn one(tokenizer: &Tokenizer, s: &str) -> Result<u32> {
+            let enc = tokenizer
+                .encode(s, false)
+                .map_err(|e| anyhow!("tokenizing marker {s:?}: {e}"))?;
+            let ids = enc.get_ids();
+            anyhow::ensure!(ids.len() == 1, "marker {s:?} encodes to {} tokens, want 1", ids.len());
+            Ok(ids[0])
+        }
+        Ok(Self {
+            sep_text: one(tokenizer, "[SEP_TEXT]")?,
+            p: one(tokenizer, "[P]")?,
+            e: one(tokenizer, "[E]")?,
+            l: one(tokenizer, "[L]")?,
+            r: one(tokenizer, "[R]")?,
+        })
+    }
+}
 
 /// One extracted entity mention.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -172,40 +204,34 @@ fn sigmoid(x: f32) -> f32 {
     }
 }
 
-/// Prompt tokens for one schema group, mirroring
-/// `SchemaTransformer._transform_schema(parent, fields, marker)`:
-/// `( [P] {parent} ( [M] field … ) )` with `[M]` = `[E]`/`[C]`/`[R]`/`[L]`.
-fn schema_tokens(parent: &str, marker: &str, labels: &[String]) -> Vec<String> {
-    let mut toks = vec!["(".to_string(), "[P]".to_string(), parent.to_string(), "(".to_string()];
-    for lb in labels {
-        toks.push(marker.to_string());
-        toks.push(lb.clone());
-    }
-    toks.push(")".to_string());
-    toks.push(")".to_string());
-    toks
+/// Which ONNX layout a snapshot holds.
+#[derive(Debug)]
+enum Backend {
+    /// DanKau 3-graph split: encoder + entity boundary + classifier.
+    Dankau { encoder: Session, boundary: Session, classifier: Session },
+    /// Nicolasembleton single-graph export: model (encoder + entity pair
+    /// path + classifier + text/candidate/rel-role states) + heads
+    /// (SparseRelationScorer, used by `extract_relations`).
+    Nico { model: Session, heads: Session },
 }
 
-/// Prompt tokens for one entity schema group: `( [P] entities ( [E] … ) )`.
-fn entity_schema_tokens(labels: &[String]) -> Vec<String> {
-    schema_tokens("entities", "[E]", labels)
-}
-
-/// Loaded model: tokenizer + encoder/boundary/classifier sessions.
+/// Loaded model: tokenizer + sessions for the snapshot's layout.
 pub struct GlinerOnnx {
     tokenizer: Tokenizer,
     #[allow(dead_code)] // sessions borrow it; keep alive explicitly
     env: Arc<Environment>,
-    encoder: Session,
-    boundary: Session,
-    classifier: Session,
+    backend: Backend,
+    markers: MarkerIds,
     splitter: WhitespaceSplitter,
     snapshot_dir: PathBuf,
 }
 
 impl GlinerOnnx {
-    /// Load from a DanKau snapshot directory (or the HF cache snapshot that
-    /// holds `tokenizer.json` + `onnx/*.onnx`).
+    /// Load from a snapshot directory (or the HF cache snapshot that holds
+    /// `tokenizer.json` + `onnx/*.onnx`). Layout is detected: a directory
+    /// with `onnx/model.onnx` (+ `onnx/heads.onnx`) loads as the
+    /// Nicolasembleton single-graph export; otherwise the DanKau 3-graph
+    /// split (`encoder`/`boundary`/`classifier`) is expected.
     ///
     /// The ONNX Runtime dylib resolves via `ORT_DYLIB_PATH`, or
     /// `GLINER_ORT_DYLIB` to override without touching the shared variable.
@@ -222,16 +248,29 @@ impl GlinerOnnx {
         );
         let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| anyhow!("loading tokenizer.json: {e}"))?;
-        let encoder = Session::builder(&env)?
-            .commit_from_file(dir.join("onnx/encoder.onnx"))
-            .with_context(|| format!("loading {}", dir.join("onnx/encoder.onnx").display()))?;
-        let boundary = Session::builder(&env)?
-            .commit_from_file(dir.join("onnx/boundary.onnx"))
-            .with_context(|| format!("loading {}", dir.join("onnx/boundary.onnx").display()))?;
-        let classifier = Session::builder(&env)?
-            .commit_from_file(dir.join("onnx/classifier.onnx"))
-            .with_context(|| format!("loading {}", dir.join("onnx/classifier.onnx").display()))?;
-        Ok(Self { tokenizer, env, encoder, boundary, classifier, splitter: WhitespaceSplitter::new()?, snapshot_dir: dir })
+        let markers = MarkerIds::resolve(&tokenizer)?;
+        let load_session = |name: &str| {
+            Session::builder(&env)
+                .and_then(|mut b| b.commit_from_file(dir.join("onnx").join(name)))
+                .with_context(|| format!("loading {}", dir.join("onnx").join(name).display()))
+        };
+        let backend = if dir.join("onnx/model.onnx").exists() {
+            let model = load_session("model.onnx")?;
+            let heads = load_session("heads.onnx")?;
+            Backend::Nico { model, heads }
+        } else {
+            let encoder = load_session("encoder.onnx")?;
+            let boundary = load_session("boundary.onnx")?;
+            let classifier = load_session("classifier.onnx")?;
+            Backend::Dankau { encoder, boundary, classifier }
+        };
+        Ok(Self { tokenizer, env, backend, markers, splitter: WhitespaceSplitter::new()?, snapshot_dir: dir })
+    }
+
+    /// Relation scoring is available on exports that bundle the
+    /// SparseRelationScorer (`onnx/heads.onnx`).
+    pub fn supports_relations(&self) -> bool {
+        matches!(self.backend, Backend::Nico { .. })
     }
 
     pub fn snapshot_dir(&self) -> &Path {
@@ -259,7 +298,7 @@ impl GlinerOnnx {
         text: &str,
         labels: &[String],
     ) -> Result<BuiltInputs> {
-        self.build_inputs_with("entities", "[E]", E_ID, text, labels)
+        self.build_inputs_with("entities", "[E]", self.markers.e, text, labels)
     }
 
     /// Build inputs for a classification schema:
@@ -271,7 +310,7 @@ impl GlinerOnnx {
         task: &str,
         labels: &[String],
     ) -> Result<BuiltInputs> {
-        self.build_inputs_with(task, "[L]", L_ID, text, labels)
+        self.build_inputs_with(task, "[L]", self.markers.l, text, labels)
     }
 
     fn build_inputs_with(
@@ -284,48 +323,74 @@ impl GlinerOnnx {
     ) -> Result<BuiltInputs> {
         let normalized = Self::normalize(text);
         let words = self.splitter.split(&normalized);
-
-        let mut combined: Vec<String> = schema_tokens(parent, marker, labels);
-        combined.push("[SEP_TEXT]".to_string());
-        for w in &words {
-            combined.push(w.lowered.clone());
+        let mut segs: Vec<(String, SegKind)> = vec![
+            ("(".to_string(), SegKind::Plain),
+            ("[P]".to_string(), SegKind::P),
+            (parent.to_string(), SegKind::Plain),
+            ("(".to_string(), SegKind::Plain),
+        ];
+        for lb in labels {
+            segs.push((marker.to_string(), SegKind::Query));
+            segs.push((lb.clone(), SegKind::Plain));
         }
+        segs.push((")".to_string(), SegKind::Plain));
+        segs.push((")".to_string(), SegKind::Plain));
+        segs.push(("[SEP_TEXT]".to_string(), SegKind::Plain));
+        for w in &words {
+            segs.push((w.lowered.clone(), SegKind::Word));
+        }
+        let mut built = self.assemble(segs, words, normalized, marker_id)?;
+        anyhow::ensure!(
+            built.query_pos.len() == labels.len(),
+            "found {} markers for {} labels",
+            built.query_pos.len(),
+            labels.len()
+        );
+        // Classify path reuses `query_pos` for `[L]` markers; entity path for `[E]`.
+        let _ = &mut built;
+        Ok(built)
+    }
 
+    /// Encode schema segments, tracking `[P]`/`[E]`/`[L]`/`[R]`/word routing
+    /// by segment kind instead of position arithmetic (multi-block prompts).
+    fn assemble(
+        &self,
+        segs: Vec<(String, SegKind)>,
+        words: Vec<Word>,
+        normalized: String,
+        query_marker_id: u32,
+    ) -> Result<BuiltInputs> {
         let mut input_ids: Vec<i64> = Vec::new();
         let mut word_first: Vec<usize> = Vec::with_capacity(words.len());
-        let mut query_pos: Vec<usize> = Vec::with_capacity(labels.len());
-        // Combined-token index of each marker: schema tokens are
-        // `( [P] {parent} ( [M] label … ) )`, so markers sit at 4, 6, 8, ….
-        let n_schema = 4 + 2 * labels.len() + 2;
-        let mut seen = 0usize;
-        for (tok_idx, tok) in combined.iter().enumerate() {
+        let mut query_pos: Vec<usize> = Vec::new();
+        let mut rel_pos: Vec<usize> = Vec::new();
+        for (tok, kind) in &segs {
             let pos = input_ids.len();
             let enc = self
                 .tokenizer
                 .encode(tok.as_str(), false)
                 .map_err(|e| anyhow!("tokenizing {tok:?}: {e}"))?;
             input_ids.extend(enc.get_ids().iter().map(|&id| id as i64));
-            if tok_idx < n_schema {
-                // Schema region: `[P]` at 1, markers at 4, 6, ….
-                if tok_idx == 1 {
-                    debug_assert_eq!(input_ids[pos] as u32, P_ID, "[P] id mismatch");
+            match kind {
+                SegKind::P => {
+                    debug_assert_eq!(input_ids[pos] as u32, self.markers.p, "[P] id mismatch");
                 }
-                if tok_idx >= 4 && (tok_idx - 4) % 2 == 0 && tok == marker {
-                    debug_assert_eq!(input_ids[pos] as u32, marker_id, "marker id mismatch");
+                SegKind::Query => {
+                    debug_assert_eq!(input_ids[pos] as u32, query_marker_id, "marker id mismatch");
                     query_pos.push(pos);
-                    seen += 1;
                 }
-            } else if tok_idx > n_schema {
-                // Text region: first subword of each new word.
-                word_first.push(pos);
+                SegKind::Role => {
+                    debug_assert_eq!(input_ids[pos] as u32, self.markers.r, "[R] id mismatch");
+                    rel_pos.push(pos);
+                }
+                SegKind::Word => word_first.push(pos),
+                SegKind::Plain => {}
             }
         }
-        anyhow::ensure!(seen == labels.len(), "found {seen} markers for {} labels", labels.len());
         anyhow::ensure!(word_first.len() == words.len(), "word routing mismatch");
-
         let starts: Vec<usize> = words.iter().map(|w| w.start).collect();
         let ends: Vec<usize> = words.iter().map(|w| w.end).collect();
-        Ok(BuiltInputs { normalized, words, input_ids, word_first, query_pos, starts, ends })
+        Ok(BuiltInputs { normalized, words, input_ids, word_first, query_pos, rel_pos, starts, ends })
     }
 
     /// Extract entities for `labels` at `threshold` (python default 0.5;
@@ -338,48 +403,98 @@ impl GlinerOnnx {
 
         let input_ids = Tensor::from_array((vec![1, seq_len as i64], built.input_ids.clone()))?.upcast();
         let attention_mask = Tensor::from_array((vec![1, seq_len as i64], vec![1i64; seq_len]))?.upcast();
-        let outputs = self.encoder.run(ort::inputs![input_ids, attention_mask])?;
-        let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
-        let hdim: Vec<i64> = hshape.iter().copied().collect();
-        anyhow::ensure!(hdim == vec![1, seq_len as i64, 768], "unexpected encoder output shape {hdim:?}");
-        // Gather token_states (first sub-token of each word) and query_states
-        // (hidden state at each `[E]` marker), mirroring the "first" pooling path.
-        let mut token_states = vec![0f32; n_words * 768];
-        let mut query_states = vec![0f32; n_labels * 768];
-        for (w, &pos) in built.word_first.iter().enumerate() {
-            token_states[w * 768..(w + 1) * 768].copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
-        }
-        for (q, &pos) in built.query_pos.iter().enumerate() {
-            query_states[q * 768..(q + 1) * 768].copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
-        }
 
-        let token_states = Tensor::from_array((vec![1, n_words as i64, 768], token_states))?.upcast();
-        let text_mask = Tensor::from_array((vec![1, n_words as i64], vec![true; n_words]))?.upcast();
-        let query_states = Tensor::from_array((vec![1, n_labels as i64, 768], query_states))?.upcast();
-        let query_mask = Tensor::from_array((vec![1, n_labels as i64], vec![true; n_labels]))?.upcast();
-        let bouts = self.boundary.run(ort::inputs![
-            "token_states" => token_states,
-            "text_mask" => text_mask,
-            "query_states" => query_states,
-            "query_mask" => query_mask
-        ])?;
-        let (pshape, pair_logits) = bouts["pair_logits"].try_extract_tensor::<f32>()?;
-        let pdim: Vec<i64> = pshape.iter().copied().collect();
-        anyhow::ensure!(
-            pdim.len() == 3 && pdim[0] == 1 && pdim[1] == n_labels as i64,
-            "unexpected pair_logits shape {pdim:?}"
-        );
-        let pool = pdim[2] as usize;
-        let (_, cand_indices) = bouts["candidate_indices"].try_extract_tensor::<i64>()?;
-        let (_, cand_valid) = bouts["candidate_valid"].try_extract_tensor::<bool>()?;
-        let (_, null_logits) = bouts["null_logits"].try_extract_tensor::<f32>()?;
+        let (pair_logits, cand_indices, cand_valid, null_logits) = match &mut self.backend {
+            Backend::Dankau { encoder, boundary, .. } => {
+                let outputs = encoder.run(ort::inputs![input_ids, attention_mask])?;
+                let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
+                let hdim: Vec<i64> = hshape.iter().copied().collect();
+                anyhow::ensure!(hdim == vec![1, seq_len as i64, 768], "unexpected encoder output shape {hdim:?}");
+                // Gather token_states (first sub-token of each word) and query_states
+                // (hidden state at each `[E]` marker), mirroring the "first" pooling path.
+                let mut token_states = vec![0f32; n_words * 768];
+                let mut query_states = vec![0f32; n_labels * 768];
+                for (w, &pos) in built.word_first.iter().enumerate() {
+                    token_states[w * 768..(w + 1) * 768]
+                        .copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
+                }
+                for (q, &pos) in built.query_pos.iter().enumerate() {
+                    query_states[q * 768..(q + 1) * 768]
+                        .copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
+                }
+
+                let token_states =
+                    Tensor::from_array((vec![1, n_words as i64, 768], token_states))?.upcast();
+                let text_mask =
+                    Tensor::from_array((vec![1, n_words as i64], vec![true; n_words]))?.upcast();
+                let query_states =
+                    Tensor::from_array((vec![1, n_labels as i64, 768], query_states))?.upcast();
+                let query_mask =
+                    Tensor::from_array((vec![1, n_labels as i64], vec![true; n_labels]))?.upcast();
+                let bouts = boundary.run(ort::inputs![
+                    "token_states" => token_states,
+                    "text_mask" => text_mask,
+                    "query_states" => query_states,
+                    "query_mask" => query_mask
+                ])?;
+                let (pshape, pair_logits) = bouts["pair_logits"].try_extract_tensor::<f32>()?;
+                let pdim: Vec<i64> = pshape.iter().copied().collect();
+                anyhow::ensure!(
+                    pdim.len() == 3 && pdim[0] == 1 && pdim[1] == n_labels as i64,
+                    "unexpected pair_logits shape {pdim:?}"
+                );
+                let (_, cand_indices) = bouts["candidate_indices"].try_extract_tensor::<i64>()?;
+                let (_, cand_valid) = bouts["candidate_valid"].try_extract_tensor::<bool>()?;
+                let (_, null_logits) = bouts["null_logits"].try_extract_tensor::<f32>()?;
+                (
+                    pair_logits.to_vec(),
+                    cand_indices.to_vec(),
+                    cand_valid.to_vec(),
+                    Some(null_logits.to_vec()),
+                )
+            }
+            Backend::Nico { model, .. } => {
+                // Single encoder+head pass. Entity outputs share the DanKau
+                // semantics; there is no null-logit head, so labels are
+                // threshold-gated only (parity-tested against the baseline).
+                let word_idx: Vec<i64> = built.word_first.iter().map(|&p| p as i64).collect();
+                let query_idx: Vec<i64> = built.query_pos.iter().map(|&p| p as i64).collect();
+                let mouts = model.run(ort::inputs![
+                    "input_ids" => input_ids,
+                    "attention_mask" => attention_mask,
+                    "text_word_indices" => Tensor::from_array((vec![1, n_words as i64], word_idx))?.upcast(),
+                    "text_word_mask" => Tensor::from_array((vec![1, n_words as i64], vec![1.0f32; n_words]))?.upcast(),
+                    "query_marker_indices" => Tensor::from_array((vec![1, n_labels as i64], query_idx))?.upcast(),
+                    "query_marker_mask" => Tensor::from_array((vec![1, n_labels as i64], vec![1.0f32; n_labels]))?.upcast(),
+                    "cls_marker_indices" => Tensor::from_array((vec![1, 0i64], Vec::<i64>::new()))?.upcast(),
+                    "cls_marker_mask" => Tensor::from_array((vec![1, 0i64], Vec::<f32>::new()))?.upcast(),
+                    "rel_marker_indices" => Tensor::from_array((vec![1, 0i64], Vec::<i64>::new()))?.upcast(),
+                    "rel_marker_mask" => Tensor::from_array((vec![1, 0i64], Vec::<f32>::new()))?.upcast()
+                ])?;
+                let (pshape, pair_logits) = mouts["pair_logits"].try_extract_tensor::<f32>()?;
+                let pdim: Vec<i64> = pshape.iter().copied().collect();
+                anyhow::ensure!(
+                    pdim.len() == 3 && pdim[0] == 1 && pdim[1] == n_labels as i64,
+                    "unexpected pair_logits shape {pdim:?}"
+                );
+                let (_, pair_indices) = mouts["pair_indices"].try_extract_tensor::<i64>()?;
+                let (_, pair_valid_u8) = mouts["pair_valid"].try_extract_tensor::<u8>()?;
+                let cand_valid: Vec<bool> = pair_valid_u8.iter().map(|&v| v != 0).collect();
+                (pair_logits.to_vec(), pair_indices.to_vec(), cand_valid, None)
+            }
+        };
+        let pool = pair_logits.len() / n_labels.max(1);
         let mut mentions = Vec::new();
         let mut null_probs = Vec::with_capacity(n_labels);
         for (qi, label) in labels.iter().enumerate() {
-            let null_p = sigmoid(null_logits[qi]);
-            null_probs.push((label.clone(), null_p));
-            if null_p > 0.5 {
-                continue; // abstention gate, mirrors BoundaryExtractor
+            if let Some(nulls) = null_logits.as_ref() {
+                let null_p = sigmoid(nulls[qi]);
+                null_probs.push((label.clone(), null_p));
+                if null_p > 0.5 {
+                    continue; // abstention gate, mirrors BoundaryExtractor
+                }
+            } else {
+                null_probs.push((label.clone(), 0.0));
             }
             let mut scored: Vec<(f32, usize, usize)> = Vec::new();
             for c in 0..pool {
@@ -456,17 +571,44 @@ impl GlinerOnnx {
 
         let input_ids = Tensor::from_array((vec![1, seq_len as i64], built.input_ids.clone()))?.upcast();
         let attention_mask = Tensor::from_array((vec![1, seq_len as i64], vec![1i64; seq_len]))?.upcast();
-        let outputs = self.encoder.run(ort::inputs![input_ids, attention_mask])?;
-        let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
-        let hdim: Vec<i64> = hshape.iter().copied().collect();
-        anyhow::ensure!(hdim == vec![1, seq_len as i64, 768], "unexpected encoder output shape {hdim:?}");
-        let mut states = vec![0f32; n * 768];
-        for (q, &pos) in built.query_pos.iter().enumerate() {
-            states[q * 768..(q + 1) * 768].copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
-        }
-        let hidden = Tensor::from_array((vec![n as i64, 768], states))?.upcast();
-        let couts = self.classifier.run(ort::inputs!["hidden_state" => hidden])?;
-        let (_, logits) = couts["logit"].try_extract_tensor::<f32>()?;
+        let query_idx: Vec<i64> = built.query_pos.iter().map(|&p| p as i64).collect();
+        let logits: Vec<f32> = match &mut self.backend {
+            Backend::Dankau { encoder, classifier, .. } => {
+                let outputs = encoder.run(ort::inputs![input_ids, attention_mask])?;
+                let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
+                let hdim: Vec<i64> = hshape.iter().copied().collect();
+                anyhow::ensure!(hdim == vec![1, seq_len as i64, 768], "unexpected encoder output shape {hdim:?}");
+                let mut states = vec![0f32; n * 768];
+                for (q, &pos) in built.query_pos.iter().enumerate() {
+                    states[q * 768..(q + 1) * 768].copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
+                }
+                let hidden = Tensor::from_array((vec![n as i64, 768], states))?.upcast();
+                let couts = classifier.run(ort::inputs!["hidden_state" => hidden])?;
+                let (_, logits) = couts["logit"].try_extract_tensor::<f32>()?;
+                logits.to_vec()
+            }
+            Backend::Nico { model, .. } => {
+                // The fused graph still executes the entity pair path, which
+                // cannot broadcast 0-size word/query dims: feed one masked-out
+                // dummy row (gather clamps + mask zeroes it; results unused).
+                let mouts = model.run(ort::inputs![
+                    "input_ids" => input_ids,
+                    "attention_mask" => attention_mask,
+                    "text_word_indices" => Tensor::from_array((vec![1, 1i64], vec![0i64]))?.upcast(),
+                    "text_word_mask" => Tensor::from_array((vec![1, 1i64], vec![0.0f32]))?.upcast(),
+                    "query_marker_indices" => Tensor::from_array((vec![1, 1i64], vec![0i64]))?.upcast(),
+                    "query_marker_mask" => Tensor::from_array((vec![1, 1i64], vec![0.0f32]))?.upcast(),
+                    "cls_marker_indices" => Tensor::from_array((vec![1, n as i64], query_idx))?.upcast(),
+                    "cls_marker_mask" => Tensor::from_array((vec![1, n as i64], vec![1.0f32; n]))?.upcast(),
+                    "rel_marker_indices" => Tensor::from_array((vec![1, 1i64], vec![0i64]))?.upcast(),
+                    "rel_marker_mask" => Tensor::from_array((vec![1, 1i64], vec![0.0f32]))?.upcast()
+                ])?;
+                let (cshape, cls_logits) = mouts["cls_logits"].try_extract_tensor::<f32>()?;
+                let cdim: Vec<i64> = cshape.iter().copied().collect();
+                anyhow::ensure!(cdim == vec![1, n as i64], "unexpected cls_logits shape {cdim:?}");
+                cls_logits.to_vec()
+            }
+        };
         let scores: Vec<(String, f32)> = labels
             .iter()
             .enumerate()
@@ -495,6 +637,16 @@ impl GlinerOnnx {
     }
 }
 
+/// Routing role of one schema/text token while assembling the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegKind {
+    Plain,
+    P,
+    Query,
+    Role,
+    Word,
+}
+
 /// Tokenized prompt plus routing tables.
 #[derive(Debug, Clone)]
 pub struct BuiltInputs {
@@ -505,6 +657,9 @@ pub struct BuiltInputs {
     pub word_first: Vec<usize>,
     /// Subword positions of the query markers (`[E]` or `[L]`), in label order.
     pub query_pos: Vec<usize>,
+    /// Subword positions of `[R]` role markers: relation `r` owns `2r`
+    /// (head) and `2r+1` (tail), mirroring torch schema order.
+    pub rel_pos: Vec<usize>,
     pub starts: Vec<usize>,
     pub ends: Vec<usize>,
 }
