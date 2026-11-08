@@ -186,10 +186,20 @@ copied) and `skills/lb-memory/SKILL.md`.
   directions on 0.22.3 binding ↔ bundled CLI: no migration, no lockout.
   (Do not use the old `ladybug-rust` 0.18 checkout — different storage
   version.) Still prefer copies when experimenting on live files.
-- **Relations are co-occurrence** (`RelatesTo{coOccurs}`) — for now.
-  `extract_relations` scores typed edges with the export's `SparseRelationScorer`
-  (`founder-of(Steve Jobs, Apple)` @ 0.97 in the smoke test); wiring them into
-  recall instead of `coOccurs` is the next step. LLM fallback stays an option.
+- **Relations are typed, open-schema.** Each remembered fact goes through
+  `extract_relations` (zero-shot: no declared ontology — the scorer judges
+  relatedness under a generic query and the phrase is mined from the
+  between-span surface, e.g. `founded`, `runs`). Typed pairs become directed
+  `RelatesTo` edges; pairs with no typed edge keep the old `coOccurs` fallback.
+  Every edge carries `valid_from`/`valid_to` (known-true interval, `""` =
+  unknown), `tense`, `viewpoint` (`fact` vs `opinion`, zero-shot classified
+  per fact) and confidence. Recall boosts hits whose adjacent typed
+  relations match the query ("who founded Apple" upranks the founder memory).
+  LLM fallback not needed.
+- **Pronouns resolve, they never fork.** "He/she/they/it" bind to the most
+  recent compatible entity (in-call order, then the store's most-touched
+  rows); unresolvable ones are dropped, never "He" nodes. A lone person
+  plus a role noun ("... is the CEO") links the most recent organization.
 - Recall is entity-boosted FTS (porter stemmer) with an offline-safe
   substring fallback. No embedding/vector search yet; schema is
   forward-compatible (add an embedding column + index later).

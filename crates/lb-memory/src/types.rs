@@ -205,4 +205,41 @@ pub struct SearchHit {
     pub entry: MemoryEntry,
     pub score: f32,
     pub entities: Vec<String>,
+    /// Typed relations adjacent to the hit, e.g. `"founder-of via Tim Cook"`.
+    /// Empty for older payloads.
+    #[serde(default)]
+    pub relations: Vec<String>,
+}
+
+/// One typed relation between two resolved entity surfaces, as returned by
+/// the extractor. Endpoint identity is the mention *text*: the pipeline
+/// resolves it through the same canonical/alias map as entity mentions
+/// (no span bookkeeping needed).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoredRelation {
+    pub relation_type: String,
+    pub head_text: String,
+    pub head_confidence: f32,
+    pub tail_text: String,
+    pub tail_confidence: f32,
+    pub score: f32,
+}
+
+/// A relation type to score, with head/tail entity-type constraints.
+/// Zero-shot: any type name works.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationSpec {
+    pub relation_type: String,
+    pub head_types: Vec<String>,
+    pub tail_types: Vec<String>,
+}
+
+impl RelationSpec {
+    pub fn new(relation_type: &str, head_types: &[&str], tail_types: &[&str]) -> Self {
+        Self {
+            relation_type: relation_type.to_string(),
+            head_types: head_types.iter().map(|s| s.to_string()).collect(),
+            tail_types: tail_types.iter().map(|s| s.to_string()).collect(),
+        }
+    }
 }

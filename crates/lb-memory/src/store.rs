@@ -16,10 +16,36 @@ use crate::types::{Category, MemoryEntry, MemoryStatus, Provenance};
 const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE NODE TABLE IF NOT EXISTS Memory(id SERIAL PRIMARY KEY, content STRING, category STRING, user_id STRING, project STRING, session_id STRING, importance INT64, status STRING, provenance JSON, created_at TIMESTAMP DEFAULT current_timestamp(), updated_at TIMESTAMP DEFAULT current_timestamp())",
     "CREATE NODE TABLE IF NOT EXISTS Entity(id SERIAL PRIMARY KEY, canonical_name STRING, entity_type STRING, aliases JSON, created_at TIMESTAMP DEFAULT current_timestamp(), updated_at TIMESTAMP DEFAULT current_timestamp())",
-    "CREATE REL TABLE IF NOT EXISTS MentionedIn(FROM Entity TO Memory, mention_text STRING, confidence DOUBLE, span_start INT64, span_end INT64)",
-    "CREATE REL TABLE IF NOT EXISTS RelatesTo(FROM Entity TO Entity, relation_type STRING, confidence DOUBLE)",
-    "CREATE REL TABLE IF NOT EXISTS ConflictsWith(FROM Memory TO Memory, cues JSON)",
-    "CREATE REL TABLE IF NOT EXISTS Supersedes(FROM Memory TO Memory, reason STRING)",
+    "CREATE REL TABLE IF NOT EXISTS MentionedIn(FROM Entity TO Memory, mention_text STRING, confidence DOUBLE, span_start INT64, span_end INT64, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
+    "CREATE REL TABLE IF NOT EXISTS RelatesTo(FROM Entity TO Entity, relation_type STRING, confidence DOUBLE, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
+    "CREATE REL TABLE IF NOT EXISTS ConflictsWith(FROM Memory TO Memory, cues JSON, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
+    "CREATE REL TABLE IF NOT EXISTS Supersedes(FROM Memory TO Memory, reason STRING, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
+];
+
+/// Edge metadata stamped on every relationship at write time.
+/// `valid_from`/`valid_to` are ISO dates (`""` = unknown); `tense` is
+/// past|present|future|unknown as stated; `viewpoint` is `"fact"` for
+/// uncontroversial statements else `"opinion"`, with `viewpoint_confidence`.
+/// Mention/conflict/supersede edges are fact-anchored: their time range is
+/// the statement date (asserted-at), since only RelatesTo edges carry
+/// independent temporal claims.
+#[derive(Debug, Clone, Default)]
+pub struct EdgeMeta {
+    pub valid_from: String,
+    pub valid_to: String,
+    pub tense: String,
+    pub viewpoint: String,
+    pub viewpoint_confidence: f64,
+}
+
+/// New rel-table columns, backfilled on pre-existing databases via
+/// `ALTER TABLE ... ADD IF NOT EXISTS` (no-op when already present).
+const REL_MIGRATIONS: &[&str] = &[
+    "valid_from STRING",
+    "valid_to STRING",
+    "tense STRING",
+    "viewpoint STRING",
+    "viewpoint_confidence DOUBLE",
 ];
 
 pub struct Store {
@@ -148,6 +174,13 @@ impl Store {
             let conn = self.conn()?;
             for stmt in SCHEMA_STATEMENTS {
                 conn.query(stmt)?.for_each(drop);
+            }
+            for table in ["MentionedIn", "RelatesTo", "ConflictsWith", "Supersedes"] {
+                for col in REL_MIGRATIONS {
+                    let _ = conn
+                        .query(&format!("ALTER TABLE {table} ADD IF NOT EXISTS {col}"))
+                        .map(|mut r| r.for_each(drop));
+                }
             }
             // Full-text search over Memory.content (porter stemmer).
             // INSTALL fetches the extension on first use (cached under
@@ -281,9 +314,10 @@ impl Store {
         confidence: f64,
         span_start: i64,
         span_end: i64,
+        meta: &EdgeMeta,
     ) -> Result<()> {
         self.run(
-            "MATCH (e:Entity), (m:Memory) WHERE e.id = $eid AND m.id = $mid CREATE (e)-[:MentionedIn {mention_text: $text, confidence: $conf, span_start: $s, span_end: $e}]->(m)",
+            "MATCH (e:Entity), (m:Memory) WHERE e.id = $eid AND m.id = $mid CREATE (e)-[:MentionedIn {mention_text: $text, confidence: $conf, span_start: $s, span_end: $e, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(m)",
             vec![
                 ("eid", Value::Int64(entity_id)),
                 ("mid", Value::Int64(memory_id)),
@@ -291,12 +325,68 @@ impl Store {
                 ("conf", Value::Double(confidence)),
                 ("s", Value::Int64(span_start)),
                 ("e", Value::Int64(span_end)),
+                ("vf", Value::String(meta.valid_from.clone())),
+                ("vt", Value::String(meta.valid_to.clone())),
+                ("tense", Value::String(meta.tense.clone())),
+                ("vp", Value::String(meta.viewpoint.clone())),
+                ("vpc", Value::Double(meta.viewpoint_confidence)),
             ],
         )?;
         Ok(())
     }
 
-    pub fn link_cooccur(&self, a: i64, b: i64, confidence: f64) -> Result<()> {
+    /// Directed typed edge (`founder-of`, `works-at`, …). Idempotent:
+    /// an exact (src, dst, label) edge is never duplicated, so fallback
+    /// replays and reconciliations converge.
+    pub fn link_typed_relation(
+        &self,
+        src_id: i64,
+        dst_id: i64,
+        relation_type: &str,
+        confidence: f64,
+        meta: &EdgeMeta,
+    ) -> Result<()> {
+        if src_id == dst_id {
+            return Ok(());
+        }
+        let rows = self.run(
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) WHERE a.id = $src AND b.id = $dst AND r.relation_type = $t RETURN r.confidence LIMIT 1",
+            vec![
+                ("src", Value::Int64(src_id)),
+                ("dst", Value::Int64(dst_id)),
+                ("t", Value::String(relation_type.to_string())),
+            ],
+        )?;
+        if !rows.is_empty() {
+            return Ok(());
+        }
+        self.run(
+            "MATCH (a:Entity), (b:Entity) WHERE a.id = $src AND b.id = $dst CREATE (a)-[:RelatesTo {relation_type: $t, confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(b)",
+            vec![
+                ("src", Value::Int64(src_id)),
+                ("dst", Value::Int64(dst_id)),
+                ("t", Value::String(relation_type.to_string())),
+                ("conf", Value::Double(confidence)),
+                ("vf", Value::String(meta.valid_from.clone())),
+                ("vt", Value::String(meta.valid_to.clone())),
+                ("tense", Value::String(meta.tense.clone())),
+                ("vp", Value::String(meta.viewpoint.clone())),
+                ("vpc", Value::Double(meta.viewpoint_confidence)),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Typed edges touching one entity: `(other_canonical, relation_type)`.
+    pub fn typed_relations_of(&self, entity_id: i64) -> Result<Vec<(String, String)>> {
+        let rows = self.run(
+            "MATCH (e:Entity)-[r:RelatesTo]-(o:Entity) WHERE e.id = $id AND r.relation_type <> 'coOccurs' RETURN o.canonical_name, r.relation_type",
+            vec![("id", Value::Int64(entity_id))],
+        )?;
+        rows.iter().map(|r| Ok((as_string(&r[0])?, as_string(&r[1])?))).collect()
+    }
+
+    pub fn link_cooccur(&self, a: i64, b: i64, confidence: f64, meta: &EdgeMeta) -> Result<()> {
         if a == b {
             return Ok(());
         }
@@ -307,27 +397,55 @@ impl Store {
         )?;
         if rows.is_empty() {
             self.run(
-                "MATCH (x:Entity), (y:Entity) WHERE x.id = $lo AND y.id = $hi CREATE (x)-[:RelatesTo {relation_type: 'coOccurs', confidence: $conf}]->(y)",
-                vec![("lo", Value::Int64(lo)), ("hi", Value::Int64(hi)), ("conf", Value::Double(confidence))],
+                "MATCH (x:Entity), (y:Entity) WHERE x.id = $lo AND y.id = $hi CREATE (x)-[:RelatesTo {relation_type: 'coOccurs', confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(y)",
+                vec![
+                    ("lo", Value::Int64(lo)),
+                    ("hi", Value::Int64(hi)),
+                    ("conf", Value::Double(confidence)),
+                    ("vf", Value::String(meta.valid_from.clone())),
+                    ("vt", Value::String(meta.valid_to.clone())),
+                    ("tense", Value::String(meta.tense.clone())),
+                    ("vp", Value::String(meta.viewpoint.clone())),
+                    ("vpc", Value::Double(meta.viewpoint_confidence)),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn link_conflict(&self, new_id: i64, old_id: i64, cues: &[String]) -> Result<()> {
+    pub fn link_conflict(&self, new_id: i64, old_id: i64, cues: &[String], meta: &EdgeMeta) -> Result<()> {
         let cues_json: JsonValue =
             JsonValue::Array(cues.iter().map(|s| JsonValue::String(s.clone())).collect());
         self.run(
-            "MATCH (a:Memory), (b:Memory) WHERE a.id = $new AND b.id = $old CREATE (a)-[:ConflictsWith {cues: $cues}]->(b)",
-            vec![("new", Value::Int64(new_id)), ("old", Value::Int64(old_id)), ("cues", Value::Json(cues_json))],
+            "MATCH (a:Memory), (b:Memory) WHERE a.id = $new AND b.id = $old CREATE (a)-[:ConflictsWith {cues: $cues, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(b)",
+            vec![
+                ("new", Value::Int64(new_id)),
+                ("old", Value::Int64(old_id)),
+                ("cues", Value::Json(cues_json)),
+                ("vf", Value::String(meta.valid_from.clone())),
+                ("vt", Value::String(meta.valid_to.clone())),
+                ("tense", Value::String(meta.tense.clone())),
+                ("vp", Value::String(meta.viewpoint.clone())),
+                ("vpc", Value::Double(meta.viewpoint_confidence)),
+            ],
         )?;
         Ok(())
     }
 
     pub fn link_supersedes(&self, new_id: i64, old_id: i64, reason: &str) -> Result<()> {
+        let meta = EdgeMeta::default();
         self.run(
-            "MATCH (a:Memory), (b:Memory) WHERE a.id = $new AND b.id = $old CREATE (a)-[:Supersedes {reason: $reason}]->(b)",
-            vec![("new", Value::Int64(new_id)), ("old", Value::Int64(old_id)), ("reason", Value::String(reason.to_string()))],
+            "MATCH (a:Memory), (b:Memory) WHERE a.id = $new AND b.id = $old CREATE (a)-[:Supersedes {reason: $reason, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(b)",
+            vec![
+                ("new", Value::Int64(new_id)),
+                ("old", Value::Int64(old_id)),
+                ("reason", Value::String(reason.to_string())),
+                ("vf", Value::String(meta.valid_from.clone())),
+                ("vt", Value::String(meta.valid_to.clone())),
+                ("tense", Value::String(meta.tense.clone())),
+                ("vp", Value::String(meta.viewpoint.clone())),
+                ("vpc", Value::Double(meta.viewpoint_confidence)),
+            ],
         )?;
         Ok(())
     }
@@ -336,26 +454,7 @@ impl Store {
 
     pub fn list_entities(&self) -> Result<Vec<KnownEntity>> {
         let rows = self.run("MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases", vec![])?;
-        let mut out = Vec::new();
-        for row in rows {
-            let id = as_i64(&row[0])?;
-            let canonical = as_string(&row[1])?;
-            let entity_type = as_string(&row[2])?;
-            let aliases: Vec<String> = match &row[3] {
-                Value::Json(JsonValue::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-                _ => vec![canonical.clone()],
-            };
-            let aliases = if aliases.is_empty() { vec![canonical.clone()] } else { aliases };
-            out.push(KnownEntity {
-                id,
-                normalized: crate::resolve::normalize(&canonical),
-                canonical,
-                entity_type,
-                alias_normalized: aliases.iter().map(|a| crate::resolve::normalize(a)).collect(),
-                aliases,
-            });
-        }
-        Ok(out)
+        rows.iter().map(|row| row_to_known(row)).collect()
     }
 
     fn scope_where(&self, alias: &str, user: &str, project: &str, session: Option<&str>) -> (String, Vec<(String, Value)>) {
@@ -845,6 +944,57 @@ impl Store {
         Ok(GraphSnapshot { nodes, links })
     }
 
+    /// All RelatesTo edges as `(src_canonical, dst_canonical, relation_type)`.
+    /// Test/audit support (demo graph inspection included).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn relates_to_labels(&self) -> Result<Vec<(String, String, String)>> {
+        let rows = self.run(
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) RETURN a.canonical_name, b.canonical_name, r.relation_type",
+            vec![],
+        )?;
+        rows.iter().map(|r| Ok((as_string(&r[0])?, as_string(&r[1])?, as_string(&r[2])?))).collect()
+    }
+
+    /// Full RelatesTo edge dump for tests: (src, dst, type, confidence,
+    /// valid_from, valid_to, tense, viewpoint, viewpoint_confidence).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn relates_to_full(
+        &self,
+    ) -> Result<Vec<(String, String, String, f64, String, String, String, String, f64)>> {
+        let rows = self.run(
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) RETURN a.canonical_name, b.canonical_name, r.relation_type, r.confidence, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence",
+            vec![],
+        )?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    as_string(&r[0])?,
+                    as_string(&r[1])?,
+                    as_string(&r[2])?,
+                    as_f64(&r[3])?,
+                    as_string(&r[4]).unwrap_or_default(),
+                    as_string(&r[5]).unwrap_or_default(),
+                    as_string(&r[6]).unwrap_or_default(),
+                    as_string(&r[7]).unwrap_or_default(),
+                    as_f64(&r[8]).unwrap_or(0.0),
+                ))
+            })
+            .collect()
+    }
+
+    /// Most recently touched entities, newest first (by `updated_at`).
+    /// Discourse context for anaphora and implicit-argument resolution.
+    pub fn recent_entities(&self, limit: usize) -> Result<Vec<KnownEntity>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases ORDER BY e.updated_at DESC LIMIT {}",
+                limit.clamp(1, 50)
+            ),
+            vec![],
+        )?;
+        rows.iter().map(|row| row_to_known(row)).collect()
+    }
+
     pub fn conflicts_of(&self, memory_id: i64) -> Result<Vec<(i64, Vec<String>)>> {
         let rows = self.run(
             "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE a.id = $id RETURN b.id, c.cues",
@@ -911,6 +1061,25 @@ fn clamp_limit(limit: usize) -> usize {
 
 fn first_id(rows: &[Vec<Value>]) -> Result<i64> {
     rows.first().map(|r| as_i64(&r[0])).transpose()?.ok_or_else(|| anyhow!("no id returned"))
+}
+
+pub(crate) fn row_to_known(row: &Vec<Value>) -> Result<KnownEntity> {
+    let id = as_i64(&row[0])?;
+    let canonical = as_string(&row[1])?;
+    let entity_type = as_string(&row[2])?;
+    let aliases: Vec<String> = match &row[3] {
+        Value::Json(JsonValue::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        _ => vec![canonical.clone()],
+    };
+    let aliases = if aliases.is_empty() { vec![canonical.clone()] } else { aliases };
+    Ok(KnownEntity {
+        id,
+        normalized: crate::resolve::normalize(&canonical),
+        canonical,
+        entity_type,
+        alias_normalized: aliases.iter().map(|a| crate::resolve::normalize(a)).collect(),
+        aliases,
+    })
 }
 
 pub fn as_i64(v: &Value) -> Result<i64> {

@@ -385,6 +385,9 @@ fn cmd_search(args: Args) -> Result<()> {
         if !h.entities.is_empty() {
             println!("    entities: {}", h.entities.join(", "));
         }
+        if !h.relations.is_empty() {
+            println!("    relations: {}", h.relations.join("; "));
+        }
     }
     Ok(())
 }
@@ -400,18 +403,22 @@ fn global_recall(
     use std::collections::HashSet;
     let mut hits: Vec<SearchHit> = Vec::new();
     let mut seen: HashSet<i64> = HashSet::new();
+    let pipe = Pipeline::new(store, PipelineOptions::default());
     for (canonical, _, _) in store.entities_matching(query, 5)? {
         // entities_matching is global already (no scope columns on Entity).
         for (entry, conf) in store.memories_for_entity_global(&canonical, user, 3)? {
             if seen.insert(entry.id) {
-                hits.push(SearchHit { entry, score: conf as f32 + 0.1, entities: vec![canonical.clone()] });
+                let entities = vec![canonical.clone()];
+                let (boost, relations) = pipe.relations_for(&entities, query).unwrap_or_default();
+                hits.push(SearchHit { entry, score: conf as f32 + 0.1 + boost, entities, relations });
             }
         }
     }
     for (entry, score) in store.search_content_global(query, user, limit)? {
         if seen.insert(entry.id) {
             let entities = store.entities_for_memory(entry.id).unwrap_or_default();
-            hits.push(SearchHit { entry, score: score as f32, entities });
+            let (boost, relations) = pipe.relations_for(&entities, query).unwrap_or_default();
+            hits.push(SearchHit { entry, score: score as f32 + boost, entities, relations });
         }
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());

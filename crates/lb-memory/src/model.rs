@@ -16,6 +16,17 @@ pub trait Extractor {
     fn classify(&mut self, _text: &str, _task: &str, _labels: &[String]) -> Result<Vec<(String, f32)>> {
         Ok(vec![])
     }
+    /// Typed relations between entity mentions in `text`, given the entity
+    /// labels in play. Default: unsupported (no typed edges).
+    fn extract_relations(
+        &mut self,
+        _text: &str,
+        _entity_labels: &[String],
+        _relations: &[crate::types::RelationSpec],
+        _threshold: f32,
+    ) -> Result<Vec<crate::types::ScoredRelation>> {
+        Ok(vec![])
+    }
 }
 
 /// Lazy GLiNER2.5 extractor: sessions load on first `extract`, never for
@@ -61,6 +72,46 @@ impl Extractor for GlinerExtractor {
         let model = self.model.as_mut().expect("just loaded");
         Ok(model.classify(text, task, labels, false, 0.5)?.scores)
     }
+
+    fn extract_relations(
+        &mut self,
+        text: &str,
+        entity_labels: &[String],
+        relations: &[crate::types::RelationSpec],
+        threshold: f32,
+    ) -> Result<Vec<crate::types::ScoredRelation>> {
+        if self.model.is_none() {
+            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+        }
+        let model = self.model.as_mut().expect("just loaded");
+        // Layouts without the scorer graph (DanKau 3-graph split) simply
+        // yield no typed edges; the pipeline falls back to co-occurrence.
+        if !model.supports_relations() {
+            return Ok(vec![]);
+        }
+        let specs: Vec<gliner_onnx::RelationSpec> = relations
+            .iter()
+            .map(|r| gliner_onnx::RelationSpec {
+                relation_type: r.relation_type.clone(),
+                head_types: r.head_types.clone(),
+                tail_types: r.tail_types.clone(),
+                description: None,
+                allow_self: false,
+            })
+            .collect();
+        let out = model.extract_relations(text, entity_labels, &specs, threshold)?;
+        Ok(out
+            .into_iter()
+            .map(|r| crate::types::ScoredRelation {
+                relation_type: r.relation_type,
+                head_text: r.head.text,
+                head_confidence: r.head.confidence,
+                tail_text: r.tail.text,
+                tail_confidence: r.tail.confidence,
+                score: r.score,
+            })
+            .collect())
+    }
 }
 
 /// Deterministic fake for unit tests (no model, no dylib).
@@ -68,6 +119,14 @@ impl Extractor for GlinerExtractor {
 pub struct FakeExtractor {
     pub mentions: Vec<ScoredMention>,
     pub classify_scores: Vec<(String, f32)>,
+    pub relations: Vec<crate::types::ScoredRelation>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Default for FakeExtractor {
+    fn default() -> Self {
+        Self { mentions: vec![], classify_scores: vec![], relations: vec![] }
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -78,5 +137,15 @@ impl Extractor for FakeExtractor {
 
     fn classify(&mut self, _text: &str, _task: &str, _labels: &[String]) -> Result<Vec<(String, f32)>> {
         Ok(self.classify_scores.clone())
+    }
+
+    fn extract_relations(
+        &mut self,
+        _text: &str,
+        _entity_labels: &[String],
+        _relations: &[crate::types::RelationSpec],
+        _threshold: f32,
+    ) -> Result<Vec<crate::types::ScoredRelation>> {
+        Ok(self.relations.clone())
     }
 }

@@ -22,11 +22,12 @@ use crate::chunker::{LogicalChunker, split_sentences};
 use crate::classify::{classify, is_acknowledgment};
 use crate::conflicts::{FactVerdict, decide};
 use crate::model::Extractor;
-use crate::resolve::{KnownEntity, compare, resolve};
+use crate::resolve::{KnownEntity, compare, resolve, bind_pronouns, is_pronoun};
+use time::OffsetDateTime;
 use crate::store::Store;
 use crate::types::{
     Category, ComparedEntity, FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport,
-    ResolvedEntity, ScoredMention, Scope, SearchHit,
+    ResolvedEntity, ScoredMention, ScoredRelation, Scope, SearchHit,
 };
 
 /// Steps 2-4 output: everything `commit_plan` (direct write) or
@@ -42,6 +43,49 @@ struct FactPlan {
     conflicts: Vec<(i64, Vec<String>)>,
     duplicate_of: Option<(i64, f32)>,
     importance: i64,
+    relations: Vec<ScoredRelation>,
+    viewpoint: String,
+    viewpoint_confidence: f32,
+    valid_from: String,
+    valid_to: String,
+    tense: String,
+}
+
+fn default_entity_labels() -> Vec<String> {
+    crate::model::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Crude stemmer for matching relation verbs against query words
+/// ("founded" ~ "founder-of", "works" ~ "works-at"): lowercase, strip a
+/// single common suffix, then equality or prefix match on stems >= 4 chars.
+fn stem_word(s: &str) -> String {
+    let mut w: String = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    for suf in ["ing", "ed", "es", "s"] {
+        if w.len() > suf.len() + 2 && w.ends_with(suf) {
+            w.truncate(w.len() - suf.len());
+            break;
+        }
+    }
+    w
+}
+
+fn relation_cue_match(relation_type: &str, query: &str) -> bool {
+    let qw: Vec<String> = query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+        .map(stem_word)
+        .collect();
+    if qw.is_empty() {
+        return false;
+    }
+    relation_type.split('-').any(|part| {
+        let st = stem_word(part);
+        if st.len() < 4 {
+            return false;
+        }
+        qw.iter().any(|w| w.len() >= 4 && (w == &st || w.starts_with(&st) || st.starts_with(w)))
+    })
 }
 
 /// Labels for model-based fact categorization (must match `Category`).
@@ -58,6 +102,10 @@ fn category_labels() -> Vec<String> {
 pub struct PipelineOptions {
     /// GLiNER threshold for keeping a mention.
     pub extract_threshold: f32,
+    /// Relation score threshold for keeping a typed edge. Relation scores
+    /// are not calibrated to entity confidences (a true edge can score
+    /// ~0.6 while its entities score 0.99), so this defaults lower.
+    pub relation_threshold: f32,
     /// Default importance for new facts.
     pub importance: i64,
     /// Max chunk size for extraction scoping.
@@ -66,7 +114,7 @@ pub struct PipelineOptions {
 
 impl Default for PipelineOptions {
     fn default() -> Self {
-        Self { extract_threshold: 0.5, importance: 5, max_chunk: 2000 }
+        Self { extract_threshold: 0.5, relation_threshold: 0.5, importance: 5, max_chunk: 2000 }
     }
 }
 
@@ -201,24 +249,15 @@ impl<'s> Pipeline<'s> {
         let mut reports = Vec::new();
         // New entities created earlier in this call are visible to later facts.
         let mut known = known;
+        // Canonical names in resolution order: discourse context for
+        // pronoun binding in later facts of this call.
+        let mut recent_order: Vec<String> = Vec::new();
         for (fact_text, extracted) in facts {
-            reports.push(self.write_one(extractor, fact_text, extracted, scope, importance, &provenance, &mut known)?);
+            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known, &recent_order)?;
+            recent_order.extend(plan.resolved.iter().map(|r| crate::resolve::normalize(&r.canonical)));
+            reports.push(self.commit_plan(plan, scope, &provenance, &mut known)?);
         }
         Ok(reports)
-    }
-
-    fn write_one(
-        &self,
-        extractor: &mut dyn Extractor,
-        fact_text: String,
-        extracted: Vec<ScoredMention>,
-        scope: &Scope,
-        importance: Option<i64>,
-        provenance: &Provenance,
-        known: &mut Vec<KnownEntity>,
-    ) -> Result<RememberReport> {
-        let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, known)?;
-        self.commit_plan(plan, scope, provenance, known)
     }
 
     /// Steps 2-4 of the pipeline: compare + resolve against the live schema,
@@ -232,9 +271,25 @@ impl<'s> Pipeline<'s> {
         scope: &Scope,
         importance: Option<i64>,
         known: &[KnownEntity],
+        recent_order: &[String],
     ) -> Result<FactPlan> {
-        // Steps 2-3: compare + resolve against the live schema.
-        let compared = compare(&extracted, known);
+        // Step 2a: anaphora — bind pronouns to recent entities (in-call
+        // resolution order, then the store's most-recently-touched rows).
+        // Unresolvable pronouns are dropped and can never fork "He" nodes.
+        let store_recents = self.store.recent_entities(10).unwrap_or_default();
+        let (kept, links) = bind_pronouns(&extracted, known, recent_order, &store_recents);
+        // The kept mentions are the fact from here on (dropped pronouns
+        // must not influence decide/extract either).
+        let extracted = kept;
+        // Steps 2-3: compare + resolve against the live schema. Pronoun
+        // links override whatever compare infers from the surface form.
+        let mut compared = compare(&extracted, known);
+        for (idx, ant) in &links {
+            if let Some(c) = compared.get_mut(*idx) {
+                c.existing_id = Some(ant.id);
+                c.existing_type = Some(ant.entity_type.clone());
+            }
+        }
         let resolved = resolve(&compared, known);
         // Categorize: deterministic cues first, model fallback when they
         // abstain. The model is already loaded in the remember path, so
@@ -294,6 +349,65 @@ impl<'s> Pipeline<'s> {
             }
         }
 
+        // Open-IE relations (step 4b): no declared schema — the scorer
+        // judges relatedness under one generic query and phrases are mined
+        // from the between-span surface. Skipped when nothing will be
+        // written; layouts without heads.onnx yield none and the pair falls
+        // back to co-occurrence.
+        let mut relations = Vec::new();
+        if duplicate_of.is_none() && !resolved.is_empty() {
+            if let Ok(rs) = extractor.extract_relations(
+                &fact_text,
+                &default_entity_labels(),
+                &[],
+                self.opts.relation_threshold,
+            ) {
+                relations = rs;
+            }
+            // Implicit argument completion: a lone person plus a role noun
+            // ("... is the CEO") links the most recent organization (else
+            // location). The type is the bare role noun.
+            let persons: Vec<&ResolvedEntity> =
+                resolved.iter().filter(|r| r.entity_type == "person").collect();
+            let has_org = resolved
+                .iter()
+                .any(|r| r.entity_type == "organization" || r.entity_type == "location");
+            if duplicate_of.is_none() && relations.is_empty() && persons.len() == 1 && !has_org {
+                if let Some((org, role)) = self.implicit_org(&fact_text, known, recent_order, &store_recents) {
+                    relations.push(ScoredRelation {
+                        relation_type: role,
+                        head_text: persons[0].canonical.clone(),
+                        head_confidence: 0.6,
+                        tail_text: org,
+                        tail_confidence: 0.6,
+                        score: 0.6,
+                    });
+                }
+            }
+        }
+
+        // Viewpoint (step 4c): "fact" for uncontroversial statements,
+        // "opinion" otherwise — a zero-shot classification of the fact text.
+        // Skipped with nothing to write; errors fall back to unknown.
+        let (viewpoint, viewpoint_confidence) =
+            if duplicate_of.is_none() && !resolved.is_empty() {
+                match extractor.classify(&fact_text, "statement-type", &["fact".to_string(), "opinion".to_string()]) {
+                    Ok(scores) => scores
+                        .into_iter()
+                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                        .unwrap_or_default(),
+                    Err(_) => (String::new(), 0.0),
+                }
+            } else {
+                (String::new(), 0.0)
+            };
+
+        // Temporal scope (step 4d): explicit dates first, tense + "now" cues
+        // as fallback. Bounds are the known-true interval, not the full
+        // history: "" means unknown, not unbounded.
+        let stmt_date = OffsetDateTime::now_utc().date().to_string();
+        let (valid_from, valid_to, tense) = resolve_time_range(&fact_text, &compared, &stmt_date);
+
         Ok(FactPlan {
             fact_text,
             extracted,
@@ -305,6 +419,12 @@ impl<'s> Pipeline<'s> {
             conflicts,
             duplicate_of,
             importance: importance.unwrap_or(self.opts.importance),
+            relations,
+            viewpoint,
+            viewpoint_confidence,
+            valid_from,
+            valid_to,
+            tense,
         })
     }
 
@@ -327,6 +447,12 @@ impl<'s> Pipeline<'s> {
             conflicts,
             duplicate_of,
             importance,
+            relations,
+            viewpoint,
+            viewpoint_confidence,
+            valid_from,
+            valid_to,
+            tense,
         } = plan;
         let session = scope.session_id.as_deref();
         // Step 5: write the graph + provenance.
@@ -345,6 +471,13 @@ impl<'s> Pipeline<'s> {
                 status,
                 provenance,
             )?;
+            let meta = crate::store::EdgeMeta {
+                valid_from: valid_from.clone(),
+                valid_to: valid_to.clone(),
+                tense: tense.clone(),
+                viewpoint: viewpoint.clone(),
+                viewpoint_confidence: viewpoint_confidence as f64,
+            };
             // Persist resolved entities (new nodes + alias growth), then edges.
             let mut entity_ids: Vec<i64> = Vec::new();
             // normalized name-or-alias -> (entity id, mention confidence).
@@ -377,6 +510,13 @@ impl<'s> Pipeline<'s> {
                     node_of.entry(crate::resolve::normalize(a)).or_insert((eid, conf));
                 }
             }
+            // Pre-bound surfaces (pronouns) resolve to nodes whose
+            // canonical/alias keys differ — index every bound mention.
+            for c in &compared {
+                if let Some(id) = c.existing_id {
+                    node_of.entry(c.normalized.clone()).or_insert((id, c.mention.confidence));
+                }
+            }
             for c in &compared {
                 if let Some((eid, conf)) = node_of.get(&c.normalized) {
                     self.store.link_mention(
@@ -386,16 +526,35 @@ impl<'s> Pipeline<'s> {
                         *conf as f64,
                         c.mention.start as i64,
                         c.mention.end as i64,
+                        &meta,
                     )?;
+                }
+            }
+            // Typed relations first: endpoint surfaces resolve through the
+            // fact's mentions, falling back to the stored schema (implicit
+            // targets like a recent org were never mentioned in this fact,
+            // so they only live in `known`).
+            let endpoint_id = |surface: &str| -> Option<i64> {
+                let norm = crate::resolve::normalize(surface);
+                if let Some((id, _)) = node_of.get(&norm) {
+                    return Some(*id);
+                }
+                known.iter().find(|k| k.normalized == norm).map(|k| k.id)
+            };
+            for rel in &relations {
+                if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
+                    if hid != tid {
+                        self.store.link_typed_relation(hid, tid, &rel.relation_type, rel.score as f64, &meta)?;
+                    }
                 }
             }
             for a in 0..entity_ids.len() {
                 for b in (a + 1)..entity_ids.len() {
-                    self.store.link_cooccur(entity_ids[a], entity_ids[b], 0.5)?;
+                    self.store.link_cooccur(entity_ids[a], entity_ids[b], 0.5, &meta)?;
                 }
             }
             for (old, cues) in &conflicts {
-                self.store.link_conflict(id, *old, cues)?;
+                self.store.link_conflict(id, *old, cues, &meta)?;
             }
             written = self.store.get_memory(id)?;
         }
@@ -463,9 +622,11 @@ impl<'s> Pipeline<'s> {
     ) -> Result<Vec<(RememberReport, i64)>> {
         let known: Vec<KnownEntity> = self.store.list_entities()?;
         let mut known = known;
+        let mut recent_order: Vec<String> = Vec::new();
         let mut staged = Vec::new();
         for (fact_text, extracted) in facts {
-            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known)?;
+            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known, &recent_order)?;
+            recent_order.extend(plan.resolved.iter().map(|r| crate::resolve::normalize(&r.canonical)));
             // stage_plan returns the report (`written: None` for
             // replicated facts) plus its intake id; the attach step resolves
             // the native row after the sync tick.
@@ -500,6 +661,12 @@ impl<'s> Pipeline<'s> {
             conflicts,
             duplicate_of,
             importance,
+            relations,
+            viewpoint,
+            viewpoint_confidence,
+            valid_from,
+            valid_to,
+            tense,
         } = plan;
         let session = scope.session_id.as_deref().unwrap_or("");
         let intake_id = intake.append_intake(&fact_text, &scope.user_id, &scope.project, session, importance)?;
@@ -555,6 +722,20 @@ impl<'s> Pipeline<'s> {
                 node_of.entry(crate::resolve::normalize(a)).or_insert(staged);
             }
         }
+        let meta = crate::store::EdgeMeta {
+            valid_from: valid_from.clone(),
+            valid_to: valid_to.clone(),
+            tense: tense.clone(),
+            viewpoint: viewpoint.clone(),
+            viewpoint_confidence: viewpoint_confidence as f64,
+        };
+        // Pre-bound surfaces (pronouns) resolve to nodes whose
+        // canonical/alias keys differ — index every bound mention.
+        for c in &report.compared {
+            if let Some(id) = c.existing_id {
+                node_of.entry(c.normalized.clone()).or_insert(id);
+            }
+        }
         for c in &report.compared {
             if let Some(staged) = node_of.get(&c.normalized) {
                 intake.stage_mention(
@@ -565,23 +746,83 @@ impl<'s> Pipeline<'s> {
                     c.mention.confidence as f64,
                     c.mention.start as i64,
                     c.mention.end as i64,
+                    &meta,
                 )?;
+            }
+        }
+        // Same endpoint resolution as the direct path: fact mentions
+        // first, stored schema as fallback for implicit targets.
+        let endpoint_id = |surface: &str| -> Option<i64> {
+            let norm = crate::resolve::normalize(surface);
+            if let Some(id) = node_of.get(&norm) {
+                return Some(*id);
+            }
+            known.iter().find(|k| k.normalized == norm).map(|k| k.id)
+        };
+        for rel in &relations {
+            if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
+                if hid != tid {
+                    intake.stage_typed_relation(intake_id, hid, tid, &rel.relation_type, rel.score as f64, &meta)?;
+                }
             }
         }
         for a in 0..entity_ids.len() {
             for b in (a + 1)..entity_ids.len() {
-                intake.stage_cooccur(intake_id, entity_ids[a], entity_ids[b], 0.5)?;
+                intake.stage_cooccur(intake_id, entity_ids[a], entity_ids[b], 0.5, &meta)?;
             }
         }
         for (old, old_cues) in &conflicts {
             let cues_json = serde_json::to_string(old_cues).unwrap_or_else(|_| "[]".to_string());
-            intake.stage_conflict(intake_id, staged_mem, *old, &cues_json)?;
+            intake.stage_conflict(intake_id, staged_mem, *old, &cues_json, &meta)?;
         }
         intake.record_outcome(
             intake_id,
             &serde_json::json!({"kind": "written", "status": status.as_str()}).to_string(),
         )?;
         Ok((report, intake_id))
+    }
+
+    /// Implicit organization for a lone person + role noun ("X is the CEO"):
+    /// most recent organization in discourse context, else most recent
+    /// location. Returns (org canonical, role noun). Nothing is invented:
+    /// the person is named, the org comes from context.
+    fn implicit_org(
+        &self,
+        fact_text: &str,
+        known: &[KnownEntity],
+        recent_order: &[String],
+        store_recents: &[KnownEntity],
+    ) -> Option<(String, String)> {
+        let words: Vec<String> = fact_text
+            .split(|c: char| !c.is_alphanumeric())
+            .map(|w| w.to_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+        let role = words.iter().find(|w| ROLE_NOUNS.contains(&w.as_str()))?.clone();
+        let mut pool: Vec<&KnownEntity> = Vec::new();
+        for norm in recent_order.iter().rev() {
+            if let Some(k) = known.iter().find(|k| &k.normalized == norm) {
+                if (k.entity_type == "organization" || k.entity_type == "location")
+                    && !pool.iter().any(|e: &&KnownEntity| e.id == k.id)
+                {
+                    pool.push(k);
+                }
+            }
+        }
+        for k in store_recents {
+            if (k.entity_type == "organization" || k.entity_type == "location")
+                && !pool.iter().any(|e: &&KnownEntity| e.id == k.id)
+                && !pool.iter().any(|e: &&KnownEntity| e.canonical == k.canonical)
+            {
+                pool.push(k);
+            }
+        }
+        // Organizations beat locations ("CEO of" an org, not a city).
+        let org = pool
+            .iter()
+            .find(|e| e.entity_type == "organization")
+            .or_else(|| pool.first())?;
+        Some((org.canonical.clone(), role))
     }
 
     /// One replication tick over `intake`: the `sqlite` extension when
@@ -701,30 +942,78 @@ impl<'s> Pipeline<'s> {
         Ok(reports)
     }
 
+
     // ---- read paths ----
 
     /// Hybrid recall: entity matches + FTS hits, entity-linked memories first.
+    /// Typed edges adjacent to a hit's entities contribute their relation
+    /// kinds for display, plus a score boost when the query mentions the
+    /// relation ("who founded Apple" upranks founder-of memories).
     pub fn recall(&self, query: &str, scope: &Scope, limit: usize) -> Result<Vec<SearchHit>> {
         let session = scope.session_id.as_deref();
         let mut hits: Vec<SearchHit> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
+        let id_of: HashMap<String, i64> =
+            self.store.list_entities().unwrap_or_default().into_iter().map(|e| (e.canonical, e.id)).collect();
 
         for (canonical, _kind, _n) in self.store.entities_matching(query, 5)? {
             for (entry, conf) in self.store.memories_for_entity(&canonical, &scope.user_id, &scope.project, session, 3)? {
                 if seen.insert(entry.id) {
-                    hits.push(SearchHit { entry, score: conf as f32 + 0.1, entities: vec![canonical.clone()] });
+                    let entities = vec![canonical.clone()];
+                    let (boost, relations) = self.describe_relations(&entities, &id_of, query).unwrap_or_default();
+                    hits.push(SearchHit {
+                        entry,
+                        score: conf as f32 + 0.1 + boost,
+                        entities,
+                        relations,
+                    });
                 }
             }
         }
         for (entry, score) in self.store.search_content(query, &scope.user_id, &scope.project, session, false, limit)? {
             if seen.insert(entry.id) {
                 let entities = self.store.entities_for_memory(entry.id).unwrap_or_default();
-                hits.push(SearchHit { entry, score: score as f32, entities });
+                let (boost, relations) = self.describe_relations(&entities, &id_of, query).unwrap_or_default();
+                hits.push(SearchHit { entry, score: score as f32 + boost, entities, relations });
             }
         }
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         hits.truncate(limit.max(1));
         Ok(hits)
+    }
+
+    /// Typed relations adjacent to `entity_names`, for display, plus a
+    /// cue-match boost against the query. Builds the canonical→id map
+    /// internally; the hot path below reuses one map across hits.
+    pub fn relations_for(&self, entity_names: &[String], query: &str) -> Result<(f32, Vec<String>)> {
+        let id_of: HashMap<String, i64> =
+            self.store.list_entities().unwrap_or_default().into_iter().map(|e| (e.canonical, e.id)).collect();
+        self.describe_relations(entity_names, &id_of, query)
+    }
+
+    /// Typed relations adjacent to `entity_names`, for display, plus a
+    /// cue-match boost against the query.
+    fn describe_relations(
+        &self,
+        entity_names: &[String],
+        id_of: &HashMap<String, i64>,
+        query: &str,
+    ) -> Result<(f32, Vec<String>)> {
+        let mut boost = 0.0f32;
+        let mut out = Vec::new();
+        let mut seen_rel = std::collections::HashSet::new();
+        for name in entity_names {
+            let Some(id) = id_of.get(name) else { continue };
+            for (other, rel) in self.store.typed_relations_of(*id)? {
+                if seen_rel.insert((other.clone(), rel.clone())) {
+                    out.push(format!("{rel} via {other}"));
+                }
+                if relation_cue_match(&rel, query) {
+                    boost += 0.3;
+                }
+            }
+        }
+        Ok((boost.min(0.6), out))
     }
 
     pub fn tour(&self, scope: &Scope, limit: usize) -> Result<Vec<MemoryEntry>> {
@@ -748,6 +1037,129 @@ impl<'s> Pipeline<'s> {
             .ok_or_else(|| anyhow::anyhow!("memory {id} not found after review"))
     }
 }
+
+/// Job-title nouns that license implicit-organization completion for a
+/// lone person ("X is the CEO" with no org mentioned). Normalized forms;
+/// "co founder" covers the hyphenated surface.
+const ROLE_NOUNS: &[&'static str] = &[
+    "ceo", "founder", "cofounder", "co founder", "president", "cto", "cio", "cfo", "coo", "chair",
+    "chairman", "chairwoman", "director", "vp", "manager", "partner", "chief", "officer", "head",
+    "lead", "mayor", "governor", "senator", "king", "queen", "pope", "owner", "boss", "captain",
+    "coach", "principal", "dean",
+];
+
+/// Resolve a fact's temporal scope: (valid_from, valid_to, tense) with ISO
+/// dates ("" = unknown). Explicit dates win; tense words ("was"→past,
+/// "is"/"now"→present, "will"→future) and "now"/"former" cues fill the
+/// gaps against the statement date. Bounds mean "known true at least
+/// during", not the full historical interval.
+fn resolve_time_range(fact_text: &str, compared: &[ComparedEntity], stmt_date: &str) -> (String, String, String) {
+    let lower = fact_text.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has_any = |cues: &[&str]| words.iter().any(|w| cues.contains(w));
+
+    let tense = if has_any(&["will", "shall"]) {
+        "future"
+    } else if has_any(&["was", "were", "had", "did", "been", "formerly", "former", "previously", "ex"]) {
+        "past"
+    } else if has_any(&["is", "are", "am", "now", "currently", "today", "present", "has", "have"]) {
+        "present"
+    } else {
+        ""
+    };
+
+    let mut from = String::new();
+    let mut to = String::new();
+    // Explicit dates from GLiNER date mentions.
+    let dates: Vec<String> = compared
+        .iter()
+        .filter(|c| c.mention.entity_type == "date")
+        .map(|c| c.mention.text.clone())
+        .collect();
+    let year_re = Regex::new(r"\b((?:19|20)\d{2})\b").expect("year regex");
+    let month_re = Regex::new(
+        r"(?i)\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2},\s*)?(\d{4})\b",
+    )
+    .expect("month regex");
+    let mut years: Vec<i32> = Vec::new();
+    for d in &dates {
+        if let Some(cap) = year_re.captures(d) {
+            if let Ok(y) = cap[1].parse::<i32>() {
+                years.push(y);
+            }
+        }
+        if let Some(cap) = month_re.captures(d) {
+            let month = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+                .iter()
+                .position(|m| m.eq_ignore_ascii_case(&cap[1]))
+                .map(|i| i + 1)
+                .unwrap_or(1) as u32;
+            if let Ok(y) = cap[3].parse::<i32>() {
+                let last = month_len(month, y);
+                let dom: u32 = cap
+                    .get(2)
+                    .map(|m| m.as_str().trim_end_matches(|c| c == ',' || c == ' ').trim().parse().unwrap_or(1))
+                    .unwrap_or(1);
+                let dom = dom.clamp(1, last);
+                if from.is_empty() {
+                    from = format!("{y:04}-{month:02}-{dom:02}");
+                }
+                to = format!("{y:04}-{month:02}-{last:02}");
+            }
+        }
+    }
+    // "between Y1 and Y2" pins both ends.
+    if years.len() >= 2 && lower.contains("between") {
+        let (mut a, mut b) = (years[0], years[1]);
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        from = format!("{a:04}-01-01");
+        to = format!("{b:04}-12-31");
+    } else {
+        for y in &years {
+            let before: String = lower
+                .find(&y.to_string())
+                .map(|pos| lower[..pos].to_string())
+                .unwrap_or_default();
+            let tail: Vec<&str> = before.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+            let tail: Vec<&&str> = tail.iter().rev().take(4).collect();
+            let has = |cues: &[&str]| tail.iter().any(|w| cues.contains(*w));
+            if has(&["from", "since", "after"]) {
+                if from.is_empty() {
+                    from = format!("{y:04}-01-01");
+                }
+            } else if has(&["until", "till", "to", "through"]) {
+                to = format!("{y:04}-12-31");
+            } else if has(&["before"]) {
+                to = format!("{:04}-12-31", y - 1);
+            } else if from.is_empty() && to.is_empty() {
+                // Bare year ("in 1976", or standalone): that calendar year.
+                from = format!("{y:04}-01-01");
+                to = format!("{y:04}-12-31");
+            }
+        }
+    }
+    // Tense/now cues fill remaining gaps against the statement date.
+    if tense == "present" && from.is_empty() && has_any(&["now", "today", "currently", "present"]) {
+        from = stmt_date.to_string();
+    }
+    if tense == "past" && to.is_empty() {
+        to = stmt_date.to_string();
+    }
+    (from, to, tense.to_string())
+}
+
+fn month_len(month: u32, year: i32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
 
 /// Surfaces too generic to be graph nodes (the subject of every
 /// preference sentence, etc.). Compared case-insensitively.
