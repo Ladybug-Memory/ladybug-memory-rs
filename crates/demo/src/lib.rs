@@ -241,6 +241,19 @@ impl DemoView {
     }
 
     fn apply_graph(&mut self, data: GraphData) {
+        // Entity graph only: fact (memory) nodes and co-occurrence links are
+        // staging detail, not shown. Typed relations between entities are
+        // the edges that remain.
+        let data = GraphData {
+            nodes: data.nodes.into_iter().filter(|n| !n.key.starts_with('m')).collect(),
+            links: data
+                .links
+                .into_iter()
+                .filter(|l| {
+                    l.label != "coOccurs" && !l.source.starts_with('m') && !l.target.starts_with('m')
+                })
+                .collect(),
+        };
         let was_empty = self.model.nodes.is_empty();
         self.model.merge(&data);
         self.rebuild_highlight();

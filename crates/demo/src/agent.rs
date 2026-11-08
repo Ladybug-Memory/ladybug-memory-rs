@@ -188,9 +188,24 @@ fn agent_loop(cfg: AgentConfig, jobs: Receiver<ToAgent>, ans: &Sender<FromAgent>
     Ok(())
 }
 
-fn highlight_keys_for(_store: &Store, hits: &[SearchHit]) -> Vec<String> {
-    // Ring the matched memory nodes; their entities sit next to them.
-    hits.iter().map(|h| format!("m{}", h.entry.id)).collect()
+fn highlight_keys_for(store: &Store, hits: &[SearchHit]) -> Vec<String> {
+    // Ring the entities linked to matched memories (memory nodes themselves
+    // are not displayed).
+    let id_of: std::collections::HashMap<String, i64> = store
+        .list_entities()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| (e.canonical, e.id))
+        .collect();
+    let mut keys = Vec::new();
+    for h in hits {
+        for ent in &h.entities {
+            if let Some(id) = id_of.get(ent) {
+                keys.push(format!("e{id}"));
+            }
+        }
+    }
+    keys
 }
 
 fn format_search_reply(query: &str, hits: &[SearchHit]) -> String {
