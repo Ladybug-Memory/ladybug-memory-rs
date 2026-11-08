@@ -744,6 +744,107 @@ impl Store {
         rows.iter().map(row_to_entry).collect()
     }
 
+    /// Whole-graph dump for visualization: all entities + memories and
+    /// every relationship edge, with demo-scale caps. Entity and Memory ids
+    /// share one SERIAL space per table but not across tables — disambiguate
+    /// with `SnapshotNodeKind` when building graph keys.
+    pub fn graph_snapshot(&self, node_limit: usize, edge_limit: usize) -> Result<GraphSnapshot> {
+        let node_limit = node_limit.clamp(1, 2000);
+        let edge_limit = edge_limit.clamp(1, 5000);
+        let mut nodes = Vec::new();
+        let mut links = Vec::new();
+
+        let rows = self.run(
+            &format!(
+                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type LIMIT {node_limit}"
+            ),
+            vec![],
+        )?;
+        for r in &rows {
+            nodes.push(SnapshotNode {
+                id: as_i64(&r[0])?,
+                kind: SnapshotNodeKind::Entity,
+                name: as_string(&r[1]).unwrap_or_default(),
+                label: as_string(&r[2]).unwrap_or_else(|_| "concept".into()),
+                status: String::new(),
+            });
+        }
+        let rows = self.run(
+            &format!(
+                "MATCH (m:Memory) RETURN m.id, m.content, m.category, m.status LIMIT {node_limit}"
+            ),
+            vec![],
+        )?;
+        for r in &rows {
+            let content = as_string(&r[1]).unwrap_or_default();
+            let name: String = content.chars().take(48).collect();
+            nodes.push(SnapshotNode {
+                id: as_i64(&r[0])?,
+                kind: SnapshotNodeKind::Memory,
+                name,
+                label: as_string(&r[2]).unwrap_or_else(|_| "general".into()),
+                status: as_string(&r[3]).unwrap_or_default(),
+            });
+        }
+
+        // Undirected match returns each RelatesTo once.
+        let edge_queries = [
+            (
+                format!(
+                    "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) RETURN e.id, m.id, r.mention_text LIMIT {edge_limit}"
+                ),
+                "MentionedIn",
+                SnapshotNodeKind::Entity,
+                SnapshotNodeKind::Memory,
+            ),
+            (
+                format!(
+                    "MATCH (a:Entity)-[r:RelatesTo]-(b:Entity) RETURN a.id, b.id, r.relation_type LIMIT {edge_limit}"
+                ),
+                "RelatesTo",
+                SnapshotNodeKind::Entity,
+                SnapshotNodeKind::Entity,
+            ),
+            (
+                format!(
+                    "MATCH (a:Memory)-[r:ConflictsWith]->(b:Memory) RETURN a.id, b.id, r.cues LIMIT {edge_limit}"
+                ),
+                "ConflictsWith",
+                SnapshotNodeKind::Memory,
+                SnapshotNodeKind::Memory,
+            ),
+            (
+                format!(
+                    "MATCH (a:Memory)-[r:Supersedes]->(b:Memory) RETURN a.id, b.id, r.reason LIMIT {edge_limit}"
+                ),
+                "Supersedes",
+                SnapshotNodeKind::Memory,
+                SnapshotNodeKind::Memory,
+            ),
+        ];
+        for (cypher, default_label, src_kind, dst_kind) in edge_queries {
+            let rows = self.run(&cypher, vec![])?;
+            for r in &rows {
+                let label = as_string(&r[2]).unwrap_or_else(|_| default_label.into());
+                let label = if label.is_empty() { default_label.into() } else { label };
+                // Cues JSON reads noisy on an edge label; keep the kind.
+                let label = if default_label == "ConflictsWith" {
+                    default_label.into()
+                } else if label.len() > 40 {
+                    label.chars().take(40).collect()
+                } else {
+                    label
+                };
+                links.push(SnapshotLink {
+                    src: (as_i64(&r[0])?, src_kind),
+                    dst: (as_i64(&r[1])?, dst_kind),
+                    label,
+                });
+            }
+        }
+        Ok(GraphSnapshot { nodes, links })
+    }
+
     pub fn conflicts_of(&self, memory_id: i64) -> Result<Vec<(i64, Vec<String>)>> {
         let rows = self.run(
             "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE a.id = $id RETURN b.id, c.cues",
@@ -766,6 +867,42 @@ impl Store {
 /// Escape a filesystem path for embedding in a single-quoted Cypher literal.
 fn cypher_path_lit(path: &str) -> String {
     path.replace('\\', "\\\\").replace('\'', "''")
+}
+
+/// One node of [`Store::graph_snapshot`].
+#[derive(Debug, Clone)]
+pub struct SnapshotNode {
+    /// Native row id (unique per table, not across tables — pair with `kind`).
+    pub id: i64,
+    pub kind: SnapshotNodeKind,
+    /// Display name: canonical name (entities) or truncated content (memories).
+    pub name: String,
+    /// Entity type / memory category (drives color).
+    pub label: String,
+    /// Memory lifecycle status; empty for entities.
+    pub status: String,
+}
+
+/// Table a [`SnapshotNode`] / [`SnapshotLink`] endpoint lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotNodeKind {
+    Entity,
+    Memory,
+}
+
+/// One edge of [`Store::graph_snapshot`]: native endpoint ids + their tables.
+#[derive(Debug, Clone)]
+pub struct SnapshotLink {
+    pub src: (i64, SnapshotNodeKind),
+    pub dst: (i64, SnapshotNodeKind),
+    pub label: String,
+}
+
+/// Whole-graph dump; see [`Store::graph_snapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct GraphSnapshot {
+    pub nodes: Vec<SnapshotNode>,
+    pub links: Vec<SnapshotLink>,
 }
 
 fn clamp_limit(limit: usize) -> usize {

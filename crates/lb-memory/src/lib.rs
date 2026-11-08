@@ -11,5 +11,5 @@ pub mod store;
 pub mod types;
 
 pub use pipeline::{Pipeline, PipelineOptions};
-pub use store::Store;
+pub use store::{GraphSnapshot, SnapshotLink, SnapshotNode, SnapshotNodeKind, Store};
 pub use types::{Category, FactDecision, MemoryEntry, MemoryStatus, Provenance, RememberReport, Scope};

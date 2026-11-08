@@ -132,6 +132,21 @@ ids via MERGE-by-PK while the direct path uses the native SERIAL sequence,
 so mixing modes on one file can collide identities. The embedded applier
 always uses the native sequence and is safe to mix.
 
+## Demo (`lbm demo`)
+
+A GPUI window with the memory agent on the left and the live entity graph on
+the right (graph view only — no treemap/sunburst):
+
+```sh
+lbm demo [--db PATH] [--snapshot PATH]   # defaults to ~/.pi/agent/lb-memory/demo.lbdb
+```
+
+Type anything to remember it: each message goes through GLiNER on a worker
+thread, distilled facts land in the graph, and the canvas merges the new
+snapshot in place (drag nodes, drag empty space to pan, wheel to zoom,
+double-click empty space to refit). `/search <q>` recalls and rings the
+matching memory nodes; `/reload` re-reads the graph; `/help` lists commands.
+
 ## Pi wiring
 
 ```

@@ -11,5 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 lb-memory.path = "../lb-memory"
+demo.path = "../demo"
 anyhow = "1.0"
 serde_json = "1.0"

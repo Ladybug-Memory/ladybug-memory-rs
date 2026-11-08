@@ -7,6 +7,7 @@
 //! lbm remember "User prefers Python for scripting" --scope project
 //! lbm remember "Fact" --via-sqlite    # sqlite-first: intake -> GLiNER -> stage -> sync
 //! lbm sync                             # drain any pending sqlite intake (crash recovery)
+//! lbm demo [--db PATH] [--snapshot PATH]  # GPUI demo: chat left, live graph right
 //! lbm search "python" --json
 //! lbm forget "python"            # lists matches; --apply deletes
 //! lbm tour --json
@@ -185,7 +186,7 @@ fn print_json(v: &serde_json::Value) {
 fn main() -> Result<()> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.is_empty() {
-        eprintln!("usage: lbm <remember|sync|search|forget|tour|status|review> [--json] ...");
+        eprintln!("usage: lbm <remember|sync|search|forget|tour|status|review|demo> [--json] ...");
         std::process::exit(2);
     }
     let cmd = raw[0].clone();
@@ -193,6 +194,7 @@ fn main() -> Result<()> {
     match cmd.as_str() {
         "remember" => cmd_remember(args),
         "sync" => cmd_sync(args),
+        "demo" => cmd_demo(args),
         "search" => cmd_search(args),
         "forget" => cmd_forget(args),
         "tour" => cmd_tour(args),
@@ -205,6 +207,15 @@ fn main() -> Result<()> {
 fn open_store(args: &Args) -> Result<Store> {
     let path = args.str("db").map(str::to_string).unwrap_or_else(default_db);
     Store::open(&path).with_context(|| format!("opening {path}"))
+}
+
+/// GPUI demo: chat with the agent on the left, watch the entity graph
+/// update on the right (graph view only — no treemap/sunburst).
+fn cmd_demo(args: Args) -> Result<()> {
+    let db = args.str("db").map(str::to_string).unwrap_or_else(demo::default_db);
+    let snapshot =
+        args.str("snapshot").map(str::to_string).unwrap_or_else(demo::default_snapshot);
+    demo::run(demo::DemoConfig { db_path: db, snapshot })
 }
 
 fn open_intake(args: &Args, store: &Store) -> Result<lb_memory::sqlite_sync::IntakeDb> {
