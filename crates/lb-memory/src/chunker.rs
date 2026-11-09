@@ -87,11 +87,35 @@ fn split_paragraphs(text: &str) -> Vec<(String, usize, usize)> {
 
 /// Split text into sentences, each with its char offset into `text`.
 /// A sentence ends at `.`/`!`/`?` followed by whitespace (or end of text).
-pub fn split_sentences(text: &str) -> Vec<(String, usize)> {
+/// Abbreviations that never end a sentence (matched lowercase).
+const SENTENCE_ABBREV: &[&str] = &[
+    "mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr", "inc", "ltd", "co", "ave", "blvd", "rd",
+    "univ", "prof", "gen", "col", "maj", "capt", "lt", "sgt", "rev", "hon", "pres", "gov",
+    "sen", "rep", "amb", "sec", "dept", "no", "al", "eg", "ie", "etc", "approx", "fig",
+];
+
+/// Token (lowercased, alphanumeric) ending just before `end` (exclusive),
+/// or an empty string at text start.
+fn preceding_token(chars: &[char], end: usize) -> String {
+    let mut s = end;
+    while s > 0 && chars[s - 1].is_alphanumeric() {
+        s -= 1;
+    }
+    chars[s..end].iter().collect::<String>().to_lowercase()
+}
+
+/// Split text into sentences, returning each trimmed sentence with
+/// its exact char span `(text, start, end)` in the input. Offsets are
+/// exact (no leading/trailing whitespace included) so callers can map
+/// character-indexed annotations into sentence coordinates.
+pub fn split_sentences(text: &str) -> Vec<(String, usize, usize)> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut start = 0usize;
-    let mut i = 0usize;
+    while start < chars.len() && chars[start].is_whitespace() {
+        start += 1;
+    }
+    let mut i = start;
     while i < chars.len() {
         let c = chars[i];
         if matches!(c, '.' | '!' | '?') {
@@ -100,11 +124,23 @@ pub fn split_sentences(text: &str) -> Vec<(String, usize)> {
                 j += 1;
             }
             // Sentence boundary only at whitespace/end (avoids "v1.2" splits).
-            if j > i + 1 || j == chars.len() {
-                let sent: String = chars[start..=i].iter().collect();
-                if !sent.trim().is_empty() {
-                    out.push((sent.trim().to_string(), start));
+            // Single uppercase initials ("J. Robert") and abbreviations
+            // ("Mr. Smith") never end a sentence.
+            let mut boundary = j > i + 1 || j == chars.len();
+            if boundary {
+                let tok = preceding_token(&chars, i);
+                let single_upper = {
+                    let t: String = chars[i.saturating_sub(tok.len())..i].iter().collect();
+                    t.chars().count() == 1
+                        && t.chars().next().map(|ch| ch.is_ascii_uppercase()).unwrap_or(false)
+                        && t != "I"
+                };
+                if single_upper || SENTENCE_ABBREV.contains(&tok.as_str()) {
+                    boundary = false;
                 }
+            }
+            if boundary {
+                out.push((chars[start..=i].iter().collect(), start, i + 1));
                 start = j;
                 i = j;
                 continue;
@@ -113,9 +149,13 @@ pub fn split_sentences(text: &str) -> Vec<(String, usize)> {
         i += 1;
     }
     if start < chars.len() {
-        let tail: String = chars[start..].iter().collect();
-        if !tail.trim().is_empty() {
-            out.push((tail.trim().to_string(), start));
+        // Trim trailing whitespace from the final segment for an exact end.
+        let mut end = chars.len();
+        while end > start && chars[end - 1].is_whitespace() {
+            end -= 1;
+        }
+        if end > start {
+            out.push((chars[start..end].iter().collect(), start, end));
         }
     }
     out
@@ -188,5 +228,40 @@ mod tests {
         // Two long paragraphs stay separate; the tiny tail merges into the last.
         assert_eq!(units.len(), 2);
         assert!(units[1].text.ends_with("Hi."));
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_sentences;
+
+    fn texts(s: &str) -> Vec<String> {
+        split_sentences(s).into_iter().map(|(t, _, _)| t).collect()
+    }
+
+    #[test]
+    fn initials_do_not_split() {
+        let parts = texts("J. Robert Oppenheimer was a physicist. He directed the lab.");
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].starts_with("J. Robert"));
+    }
+
+    #[test]
+    fn abbreviations_do_not_split() {
+        let parts = texts("Mr. Smith met Dr. Jones in Washington. They talked.");
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].starts_with("Mr. Smith"));
+    }
+
+    #[test]
+    fn pronoun_i_still_splits() {
+        let parts = texts("Who am I. You are here.");
+        assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn normal_sentences_still_split() {
+        let parts = texts("First sentence. Second here! Third?");
+        assert_eq!(parts.len(), 3);
     }
 }

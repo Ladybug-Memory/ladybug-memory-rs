@@ -109,7 +109,7 @@ impl<'s> Pipeline<'s> {
             return Ok(vec![self.extract_one(extractor, text, 0)?]);
         }
         let mut facts = Vec::new();
-        for (sent, base) in split_sentences(text) {
+        for (sent, base, _span_end) in split_sentences(text) {
             if sent.trim().is_empty() {
                 continue;
             }
