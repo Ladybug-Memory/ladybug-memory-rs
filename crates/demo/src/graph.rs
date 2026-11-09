@@ -21,6 +21,8 @@ pub struct GraphNode {
     pub label: String,
     /// Dimmed (e.g. non-active memories) paint smaller/desaturated.
     pub dim: bool,
+    /// Known aliases, shown in the hover tooltip.
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +30,16 @@ pub struct GraphLink {
     pub source: String,
     pub target: String,
     pub label: String,
+    /// Scorer confidence 0..1 (0 when unrecorded).
+    pub confidence: f32,
+    /// Known-true interval, "" = unknown.
+    pub valid_from: String,
+    pub valid_to: String,
+    /// past|present|future|"" as stated.
+    pub tense: String,
+    /// "fact"|"opinion"|"" with confidence below.
+    pub viewpoint: String,
+    pub viewpoint_confidence: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -54,6 +66,14 @@ pub struct SimNode {
     pub pos: Vec2,
     pub vel: Vec2,
     pub degree: usize,
+    pub aliases: Vec<String>,
+}
+
+/// Hover target: a node or an edge, by model index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hover {
+    Node(usize),
+    Edge(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +81,12 @@ pub struct SimLink {
     pub source: usize,
     pub target: usize,
     pub label: String,
+    pub confidence: f32,
+    pub valid_from: String,
+    pub valid_to: String,
+    pub tense: String,
+    pub viewpoint: String,
+    pub viewpoint_confidence: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,6 +127,7 @@ impl GraphModel {
                 label: node.label.clone(),
                 color,
                 dim: node.dim,
+                aliases: node.aliases.clone(),
                 pos: Vec2 {
                     x: angle.cos() * r,
                     y: angle.sin() * r,
@@ -118,6 +145,12 @@ impl GraphModel {
                     source: s,
                     target: t,
                     label: l.label.clone(),
+                    confidence: l.confidence,
+                    valid_from: l.valid_from.clone(),
+                    valid_to: l.valid_to.clone(),
+                    tense: l.tense.clone(),
+                    viewpoint: l.viewpoint.clone(),
+                    viewpoint_confidence: l.viewpoint_confidence,
                 });
             }
         }
@@ -125,7 +158,8 @@ impl GraphModel {
 
     /// Merge a fresh snapshot into the live layout: keep positions for
     /// surviving nodes so the graph grows in place instead of jumping,
-    /// spiral-place newcomers, drop the gone.
+    /// place newcomers at their linked-neighbor centroid (center spiral
+    /// only with nothing anchored), drop the gone.
     pub fn merge(&mut self, data: &GraphData) {
         let mut keep: HashMap<String, (Vec2, usize)> = HashMap::new();
         for n in &self.nodes {
@@ -134,22 +168,55 @@ impl GraphModel {
         // Rebuild through load() for degree/color correctness, then restore
         // positions for survivors.
         self.load(data);
+        // Anchor map grows as newcomers are placed, so chained newcomers
+        // settle near each other instead of stacking at the center.
+        let mut anchors: HashMap<String, Vec2> =
+            keep.iter().map(|(k, (pos, _))| (k.clone(), *pos)).collect();
+        // Linked-neighbor keys per newcomer id.
+        let mut nbrs: HashMap<String, Vec<String>> = HashMap::new();
+        for l in &data.links {
+            nbrs.entry(l.source.clone()).or_default().push(l.target.clone());
+            nbrs.entry(l.target.clone()).or_default().push(l.source.clone());
+        }
         let mut placed = 0usize;
         for n in &mut self.nodes {
             if let Some((pos, color)) = keep.get(&n.id) {
                 n.pos = *pos;
                 n.color = *color;
                 n.vel = Vec2 { x: 0.0, y: 0.0 };
+                continue;
+            }
+            // Newcomers start at the centroid of already-placed neighbors
+            // (their graph neighborhood), falling back to a center spiral
+            // only when nothing is anchored yet.
+            let mut sx = 0.0f32;
+            let mut sy = 0.0f32;
+            let mut count = 0usize;
+            if let Some(ns) = nbrs.get(&n.id) {
+                for key in ns {
+                    if let Some(p) = anchors.get(key) {
+                        sx += p.x;
+                        sy += p.y;
+                        count += 1;
+                    }
+                }
+            }
+            if count > 0 {
+                let jitter = ((placed as f32) * 2.399963).sin() * 18.0;
+                n.pos = Vec2 {
+                    x: sx / count as f32 + jitter,
+                    y: sy / count as f32 - jitter,
+                };
             } else {
-                // Newcomers spiral out from the center.
                 let angle = (placed as f32) * 2.399963;
                 let r = 60.0 + 24.0 * (placed as f32).sqrt();
                 n.pos = Vec2 {
                     x: angle.cos() * r,
                     y: angle.sin() * r,
                 };
-                placed += 1;
             }
+            anchors.insert(n.id.clone(), n.pos);
+            placed += 1;
         }
         // Reassign surviving colors by label so hues stay stable.
         let mut color_of: HashMap<String, usize> = HashMap::new();
@@ -237,6 +304,31 @@ impl GraphModel {
         }
         best.map(|(i, _)| i)
     }
+
+    /// Nearest edge to a world point within `radius` (point-to-segment
+    /// distance over the trimmed edge line), for hover tooltips.
+    pub fn pick_edge(&self, world: Vec2, radius: f32) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, l) in self.links.iter().enumerate() {
+            let (Some(a), Some(b)) = (self.nodes.get(l.source), self.nodes.get(l.target)) else {
+                continue;
+            };
+            let abx = b.pos.x - a.pos.x;
+            let aby = b.pos.y - a.pos.y;
+            let len2 = abx * abx + aby * aby;
+            if len2 < 1e-6 {
+                continue;
+            }
+            let t = (((world.x - a.pos.x) * abx + (world.y - a.pos.y) * aby) / len2).clamp(0.0, 1.0);
+            let px = a.pos.x + abx * t - world.x;
+            let py = a.pos.y + aby * t - world.y;
+            let d = (px * px + py * py).sqrt();
+            if d <= radius && best.map(|(_, b)| d < b).unwrap_or(true) {
+                best = Some((i, d));
+            }
+        }
+        best.map(|(i, _)| i)
+    }
 }
 
 pub fn node_size(degree: usize) -> f32 {
@@ -283,6 +375,37 @@ impl Camera {
         self.center_y += (before.y - after.y) as f64;
     }
 
+    /// Frame a subset of nodes (search hits); falls back to everything.
+    pub fn fit_subset(&mut self, model: &GraphModel, only: &HashSet<usize>, vw: f32, vh: f32) {
+        if only.is_empty() {
+            self.fit(model, vw, vh);
+            return;
+        }
+        let (mut x0, mut x1) = (f32::MAX, f32::MIN);
+        let (mut y0, mut y1) = (f32::MAX, f32::MIN);
+        let mut any = false;
+        for &i in only {
+            if let Some(n) = model.nodes.get(i) {
+                x0 = x0.min(n.pos.x);
+                x1 = x1.max(n.pos.x);
+                y0 = y0.min(n.pos.y);
+                y1 = y1.max(n.pos.y);
+                any = true;
+            }
+        }
+        if !any {
+            self.fit(model, vw, vh);
+            return;
+        }
+        // Pad single points so zoom stays sane.
+        let pad = 120.0;
+        self.center_x = ((x0 + x1) / 2.0) as f64;
+        self.center_y = ((y0 + y1) / 2.0) as f64;
+        let w = (x1 - x0).max(1.0) as f64 + pad * 2.0;
+        let h = (y1 - y0).max(1.0) as f64 + pad * 2.0;
+        self.zoom = ((vw as f64 / w).min(vh as f64 / h)).clamp(0.05, 40.0);
+    }
+
     pub fn fit(&mut self, model: &GraphModel, vw: f32, vh: f32) {
         if model.nodes.is_empty() {
             return;
@@ -326,6 +449,9 @@ pub struct Snapshot {
     pub camera: Camera,
     pub highlight: HashSet<usize>,
     pub selected: Option<usize>,
+    pub hover: Option<Hover>,
+    /// Mouse position in canvas-local px (for tooltip placement).
+    pub mouse: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -336,6 +462,8 @@ pub struct SnapNode {
     pub color: usize,
     pub dim: bool,
     pub degree: usize,
+    pub aliases: Vec<String>,
+    pub label: String,
 }
 
 #[derive(Clone)]
@@ -343,10 +471,23 @@ pub struct SnapLink {
     pub source: usize,
     pub target: usize,
     pub label: String,
+    pub confidence: f32,
+    pub valid_from: String,
+    pub valid_to: String,
+    pub tense: String,
+    pub viewpoint: String,
+    pub viewpoint_confidence: f32,
 }
 
 impl Snapshot {
-    pub fn capture(model: &GraphModel, camera: Camera, highlight: &HashSet<usize>, selected: Option<usize>) -> Self {
+    pub fn capture(
+        model: &GraphModel,
+        camera: Camera,
+        highlight: &HashSet<usize>,
+        selected: Option<usize>,
+        hover: Option<Hover>,
+        mouse: Option<(f32, f32)>,
+    ) -> Self {
         Self {
             nodes: model
                 .nodes
@@ -358,6 +499,8 @@ impl Snapshot {
                     color: n.color,
                     dim: n.dim,
                     degree: n.degree,
+                    aliases: n.aliases.clone(),
+                    label: n.label.clone(),
                 })
                 .collect(),
             links: model
@@ -367,11 +510,19 @@ impl Snapshot {
                     source: l.source,
                     target: l.target,
                     label: l.label.clone(),
+                    confidence: l.confidence,
+                    valid_from: l.valid_from.clone(),
+                    valid_to: l.valid_to.clone(),
+                    tense: l.tense.clone(),
+                    viewpoint: l.viewpoint.clone(),
+                    viewpoint_confidence: l.viewpoint_confidence,
                 })
                 .collect(),
             camera,
             highlight: highlight.clone(),
             selected,
+            hover,
+            mouse,
         }
     }
 }
@@ -388,6 +539,211 @@ pub fn paint_graph(snap: &Snapshot, bounds: Bounds<Pixels>, window: &mut Window,
     });
     paint_labels(snap, bounds, window, cx);
     paint_edge_labels(snap, bounds, window, cx);
+    paint_tooltip(snap, bounds, window, cx);
+}
+
+/// Hover tooltip: node name/type/aliases or edge label plus scoring and
+/// temporal metadata, pinned near the cursor.
+/// Tooltip content for a hover target: title plus detail lines.
+/// Pure function over the snapshot so tests can assert it headless.
+pub fn tooltip_content(snap: &Snapshot, hover: Hover) -> Option<(String, Vec<String>)> {
+    let mut lines: Vec<String> = Vec::new();
+    let title = match hover {
+        Hover::Node(i) => {
+            let Some(n) = snap.nodes.get(i) else { return None };
+            let title = n.name.clone();
+            let mut sub = format!("type: {}", n.label);
+            if n.degree > 0 {
+                sub.push_str(&format!("  ·  {} relation{}", n.degree, if n.degree == 1 { "" } else { "s" }));
+            }
+            lines.push(sub);
+            if !n.aliases.is_empty() {
+                let mut aka = n.aliases.join(", ");
+                if aka.len() > 64 {
+                    aka.truncate(61);
+                    aka.push_str("...");
+                }
+                lines.push(format!("aka: {aka}"));
+            }
+            // Incident typed relations with the same attribute detail as
+            // edge hovers: direction, confidence, time, viewpoint.
+            let mut incident: Vec<&SnapLink> = snap
+                .links
+                .iter()
+                .filter(|l| l.source == i || l.target == i)
+                .collect();
+            incident.sort_by(|a, b| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for l in incident.iter().take(5) {
+                let other = if l.source == i { l.target } else { l.source };
+                let other_name: &str = snap
+                    .nodes
+                    .get(other)
+                    .map(|o| o.name.as_str())
+                    .unwrap_or("?");
+                let arrow = if l.source == i { "→" } else { "←" };
+                let mut row = format!("{} {} {}", arrow, l.label, other_name);
+                if l.confidence > 0.0 {
+                    row.push_str(&format!(" · {:.0}%", l.confidence * 100.0));
+                }
+                let mut when = String::new();
+                match (!l.valid_from.is_empty(), !l.valid_to.is_empty()) {
+                    (true, true) if l.valid_from == l.valid_to => when = l.valid_from.clone(),
+                    (true, true) => when = format!("{} → {}", l.valid_from, l.valid_to),
+                    (true, false) => when = format!("since {}", l.valid_from),
+                    (false, true) => when = format!("until {}", l.valid_to),
+                    (false, false) => {}
+                }
+                if !l.tense.is_empty() && l.tense != "unknown" {
+                    if when.is_empty() {
+                        when = l.tense.clone();
+                    } else {
+                        when = format!("{when} ({})", l.tense);
+                    }
+                }
+                if !when.is_empty() {
+                    row.push_str(&format!(" · {when}"));
+                }
+                if !l.viewpoint.is_empty() {
+                    if l.viewpoint_confidence > 0.0 {
+                        row.push_str(&format!(
+                            " · {} ({:.0}%)",
+                            l.viewpoint,
+                            l.viewpoint_confidence * 100.0
+                        ));
+                    } else {
+                        row.push_str(&format!(" · {}", l.viewpoint));
+                    }
+                }
+                if row.len() > 96 {
+                    row.truncate(93);
+                    row.push_str("...");
+                }
+                lines.push(row);
+            }
+            let rest = incident.len().saturating_sub(5);
+            if rest > 0 {
+                lines.push(format!("…and {rest} more"));
+            }
+            title
+        }
+        Hover::Edge(i) => {
+            let Some(l) = snap.links.get(i) else { return None };
+            let title = if l.label.is_empty() { "related".to_string() } else { l.label.clone() };
+            if l.confidence > 0.0 {
+                lines.push(format!("confidence: {:.0}%", l.confidence * 100.0));
+            }
+            let mut when = String::new();
+            match (!l.valid_from.is_empty(), !l.valid_to.is_empty()) {
+                (true, true) if l.valid_from == l.valid_to => when = l.valid_from.clone(),
+                (true, true) => when = format!("{} → {}", l.valid_from, l.valid_to),
+                (true, false) => when = format!("since {}", l.valid_from),
+                (false, true) => when = format!("until {}", l.valid_to),
+                (false, false) => {}
+            }
+            if !l.tense.is_empty() && l.tense != "unknown" {
+                if when.is_empty() {
+                    when = l.tense.clone();
+                } else {
+                    when = format!("{when} ({})", l.tense);
+                }
+            }
+            if !when.is_empty() {
+                lines.push(format!("time: {when}"));
+            }
+            if !l.viewpoint.is_empty() {
+                if l.viewpoint_confidence > 0.0 {
+                    lines.push(format!(
+                        "viewpoint: {} ({:.0}%)",
+                        l.viewpoint,
+                        l.viewpoint_confidence * 100.0
+                    ));
+                } else {
+                    lines.push(format!("viewpoint: {}", l.viewpoint));
+                }
+            }
+            title
+        }
+    };
+    if title.is_empty() {
+        return None;
+    }
+    Some((title, lines))
+}
+
+fn paint_tooltip(snap: &Snapshot, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+    let (Some(hover), Some((mx, my))) = (snap.hover, snap.mouse) else {
+        return;
+    };
+    let ox = f32::from(bounds.origin.x);
+    let oy = f32::from(bounds.origin.y);
+    let vw = f32::from(bounds.size.width);
+    let vh = f32::from(bounds.size.height);
+    let Some((title, lines)) = tooltip_content(snap, hover) else {
+        return;
+    };
+    let font_size = px(11.0);
+    let bright: Hsla = rgb(FG).into();
+    let muted: Hsla = rgb(MUTED).into();
+    let pill: Hsla = rgb(INSET).into();
+    let mut rows: Vec<(SharedString, Hsla, f32, f32)> = Vec::new();
+    let mut wmax = 0.0f32;
+    for (idx, text) in std::iter::once(&title).chain(lines.iter()).enumerate() {
+        let color = if idx == 0 { bright } else { muted };
+        let run = TextRun {
+            len: text.len(),
+            font: font(".SystemUIFont"),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window.text_system().shape_line(text.clone().into(), font_size, &[run], None);
+        let w = f32::from(shaped.width);
+        let h = f32::from(shaped.ascent + shaped.descent);
+        wmax = wmax.max(w);
+        rows.push((text.clone().into(), color, w, h));
+    }
+    let pad_x = 7.0;
+    let pad_y = 5.0;
+    let line_h: f32 = rows.iter().map(|r| r.3).sum::<f32>() + pad_y * 2.0 + 3.0 * (rows.len().saturating_sub(1)) as f32;
+    let bw = wmax + pad_x * 2.0;
+    // Prefer below-right of the cursor; flip inside the canvas as needed.
+    let mut lx = ox + mx + 14.0;
+    let mut ly = oy + my + 16.0;
+    if lx + bw > ox + vw - 4.0 {
+        lx = ox + mx - bw - 14.0;
+    }
+    if ly + line_h > oy + vh - 4.0 {
+        ly = oy + my - line_h - 12.0;
+    }
+    lx = lx.clamp(ox + 2.0, (ox + vw - bw - 2.0).max(ox + 2.0));
+    ly = ly.clamp(oy + 2.0, (oy + vh - line_h - 2.0).max(oy + 2.0));
+    window.paint_quad(PaintQuad {
+        bounds: Bounds::new(point(px(lx), px(ly)), size(px(bw), px(line_h))),
+        corner_radii: Corners::all(px(5.)),
+        background: pill.opacity(0.96).into(),
+        border_widths: Edges::all(px(1.)),
+        border_color: rgb(0x3B4261).into(),
+        border_style: BorderStyle::Solid,
+    });
+    let mut y = ly + pad_y;
+    for (text, color, _w, h) in rows {
+        let run = TextRun {
+            len: text.len(),
+            font: font(".SystemUIFont"),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window.text_system().shape_line(text, font_size, &[run], None);
+        let _ = shaped.paint(point(px(lx + pad_x), px(y)), px(13.), window, cx);
+        y += h + 3.0;
+    }
 }
 
 fn paint_edges(snap: &Snapshot, bounds: Bounds<Pixels>, window: &mut Window) {

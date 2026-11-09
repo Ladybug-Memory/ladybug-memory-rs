@@ -886,17 +886,27 @@ impl Store {
 
         let rows = self.run(
             &format!(
-                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type LIMIT {node_limit}"
+                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases LIMIT {node_limit}"
             ),
             vec![],
         )?;
         for r in &rows {
+            let canonical = as_string(&r[1]).unwrap_or_default();
+            let aliases: Vec<String> = match &r[3] {
+                Value::Json(JsonValue::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .filter(|a| a != &canonical)
+                    .collect(),
+                _ => Vec::new(),
+            };
             nodes.push(SnapshotNode {
                 id: as_i64(&r[0])?,
                 kind: SnapshotNodeKind::Entity,
-                name: as_string(&r[1]).unwrap_or_default(),
+                name: canonical,
                 label: as_string(&r[2]).unwrap_or_else(|_| "concept".into()),
                 status: String::new(),
+                aliases,
             });
         }
         let rows = self.run(
@@ -914,14 +924,17 @@ impl Store {
                 name,
                 label: as_string(&r[2]).unwrap_or_else(|_| "general".into()),
                 status: as_string(&r[3]).unwrap_or_default(),
+                aliases: Vec::new(),
             });
         }
 
         // Undirected match returns each RelatesTo once.
+        // Each query returns (src, dst, label, confidence, valid_from,
+        // valid_to, tense, viewpoint, viewpoint_confidence).
         let edge_queries = [
             (
                 format!(
-                    "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) RETURN e.id, m.id, r.mention_text LIMIT {edge_limit}"
+                    "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) RETURN e.id, m.id, r.mention_text, r.confidence, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
                 ),
                 "MentionedIn",
                 SnapshotNodeKind::Entity,
@@ -929,7 +942,7 @@ impl Store {
             ),
             (
                 format!(
-                    "MATCH (a:Entity)-[r:RelatesTo]-(b:Entity) RETURN a.id, b.id, r.relation_type LIMIT {edge_limit}"
+                    "MATCH (a:Entity)-[r:RelatesTo]-(b:Entity) RETURN a.id, b.id, r.relation_type, r.confidence, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
                 ),
                 "RelatesTo",
                 SnapshotNodeKind::Entity,
@@ -937,7 +950,7 @@ impl Store {
             ),
             (
                 format!(
-                    "MATCH (a:Memory)-[r:ConflictsWith]->(b:Memory) RETURN a.id, b.id, r.cues LIMIT {edge_limit}"
+                    "MATCH (a:Memory)-[r:ConflictsWith]->(b:Memory) RETURN a.id, b.id, r.cues, 0.0, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
                 ),
                 "ConflictsWith",
                 SnapshotNodeKind::Memory,
@@ -945,7 +958,7 @@ impl Store {
             ),
             (
                 format!(
-                    "MATCH (a:Memory)-[r:Supersedes]->(b:Memory) RETURN a.id, b.id, r.reason LIMIT {edge_limit}"
+                    "MATCH (a:Memory)-[r:Supersedes]->(b:Memory) RETURN a.id, b.id, r.reason, 0.0, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
                 ),
                 "Supersedes",
                 SnapshotNodeKind::Memory,
@@ -969,6 +982,12 @@ impl Store {
                     src: (as_i64(&r[0])?, src_kind),
                     dst: (as_i64(&r[1])?, dst_kind),
                     label,
+                    confidence: as_f64(&r[3]).unwrap_or(0.0),
+                    valid_from: as_string(&r[4]).unwrap_or_default(),
+                    valid_to: as_string(&r[5]).unwrap_or_default(),
+                    tense: as_string(&r[6]).unwrap_or_default(),
+                    viewpoint: as_string(&r[7]).unwrap_or_default(),
+                    viewpoint_confidence: as_f64(&r[8]).unwrap_or(0.0),
                 });
             }
         }
@@ -1062,6 +1081,8 @@ pub struct SnapshotNode {
     pub label: String,
     /// Memory lifecycle status; empty for entities.
     pub status: String,
+    /// Known aliases (entities only; empty for memories).
+    pub aliases: Vec<String>,
 }
 
 /// Table a [`SnapshotNode`] / [`SnapshotLink`] endpoint lives in.
@@ -1077,6 +1098,13 @@ pub struct SnapshotLink {
     pub src: (i64, SnapshotNodeKind),
     pub dst: (i64, SnapshotNodeKind),
     pub label: String,
+    /// Edge scoring + provenance for tooltips (empty/zero when unrecorded).
+    pub confidence: f64,
+    pub valid_from: String,
+    pub valid_to: String,
+    pub tense: String,
+    pub viewpoint: String,
+    pub viewpoint_confidence: f64,
 }
 
 /// Whole-graph dump; see [`Store::graph_snapshot`].

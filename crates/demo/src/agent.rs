@@ -101,6 +101,7 @@ fn load_graph(store: &Store) -> Result<GraphData> {
             name: n.name,
             label: n.label,
             dim: !n.status.is_empty() && n.status != "active",
+            aliases: n.aliases,
         });
     }
     let mut links = Vec::with_capacity(snap.links.len());
@@ -117,6 +118,12 @@ fn load_graph(store: &Store) -> Result<GraphData> {
             source: src,
             target: dst,
             label: l.label,
+            confidence: l.confidence as f32,
+            valid_from: l.valid_from,
+            valid_to: l.valid_to,
+            tense: l.tense,
+            viewpoint: l.viewpoint,
+            viewpoint_confidence: l.viewpoint_confidence as f32,
         });
     }
     Ok(GraphData { nodes, links })
