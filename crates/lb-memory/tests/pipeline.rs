@@ -729,6 +729,72 @@ mod sqlite_first {
     }
 
     #[test]
+    fn succession_dated_not_conflict() {
+        // Year-mismatch cue fires, but the tenures are disjoint:
+        // succession, not contradiction.
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let mut ex = FakeExtractor {
+            mentions: vec![
+                mention("Steve Jobs", "person", 0.99),
+                mention("Apple", "organization", 0.98),
+                mention("2011", "date", 0.9),
+            ],
+            classify_scores: vec![("fact".to_string(), 0.9)],
+            relations: vec![],
+        };
+        pipe.remember(
+            &mut ex,
+            "Steve Jobs was CEO of Apple until 2011.",
+            &scope(),
+            None,
+            prov(),
+        )
+        .unwrap();
+        ex.mentions = vec![
+            mention("John Ternus", "person", 0.95),
+            mention("Apple", "organization", 0.98),
+            mention("2025", "date", 0.9),
+        ];
+        let reports = pipe
+            .remember(
+                &mut ex,
+                "John Ternus became CEO of Apple in 2025.",
+                &scope(),
+                None,
+                prov(),
+            )
+            .unwrap();
+        assert!(
+            matches!(reports[0].decision, lb_memory::types::FactDecision::New { .. }),
+            "dated succession must not conflict: {:?}",
+            reports[0].decision
+        );
+        assert_eq!(reports[0].written.as_ref().unwrap().status, lb_memory::types::MemoryStatus::Active);
+    }
+
+    #[test]
+    fn overlap_still_conflicts() {
+        // Same entity, antonym cue, unknown time: genuinely contradictory.
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("John", "person", 0.95)],
+            classify_scores: vec![("fact".to_string(), 0.9)],
+            relations: vec![],
+        };
+        pipe.remember(&mut ex, "John loves being CEO.", &scope(), None, prov()).unwrap();
+        ex.mentions = vec![mention("John", "person", 0.95)];
+        let reports = pipe.remember(&mut ex, "John hates being CEO.", &scope(), None, prov()).unwrap();
+        assert!(
+            matches!(reports[0].decision, lb_memory::types::FactDecision::Conflict { .. }),
+            "overlapping antonyms must conflict: {:?}",
+            reports[0].decision
+        );
+        assert_eq!(reports[0].written.as_ref().unwrap().status, lb_memory::types::MemoryStatus::NeedsReview);
+    }
+
+    #[test]
     fn sqlite_quarantine_stays_hidden() {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());

@@ -17,7 +17,7 @@ const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE NODE TABLE IF NOT EXISTS Memory(id SERIAL PRIMARY KEY, content STRING, category STRING, user_id STRING, project STRING, session_id STRING, importance INT64, status STRING, provenance JSON, created_at TIMESTAMP DEFAULT current_timestamp(), updated_at TIMESTAMP DEFAULT current_timestamp())",
     "CREATE NODE TABLE IF NOT EXISTS Entity(id SERIAL PRIMARY KEY, canonical_name STRING, entity_type STRING, aliases JSON, created_at TIMESTAMP DEFAULT current_timestamp(), updated_at TIMESTAMP DEFAULT current_timestamp())",
     "CREATE REL TABLE IF NOT EXISTS MentionedIn(FROM Entity TO Memory, mention_text STRING, confidence DOUBLE, span_start INT64, span_end INT64, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
-    "CREATE REL TABLE IF NOT EXISTS RelatesTo(FROM Entity TO Entity, relation_type STRING, confidence DOUBLE, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
+    "CREATE REL TABLE IF NOT EXISTS RelatesTo(FROM Entity TO Entity, memory_id INT64, relation_type STRING, confidence DOUBLE, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
     "CREATE REL TABLE IF NOT EXISTS ConflictsWith(FROM Memory TO Memory, cues JSON, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
     "CREATE REL TABLE IF NOT EXISTS Supersedes(FROM Memory TO Memory, reason STRING, valid_from STRING, valid_to STRING, tense STRING, viewpoint STRING, viewpoint_confidence DOUBLE)",
 ];
@@ -40,12 +40,11 @@ pub struct EdgeMeta {
 
 /// New rel-table columns, backfilled on pre-existing databases via
 /// `ALTER TABLE ... ADD IF NOT EXISTS` (no-op when already present).
-const REL_MIGRATIONS: &[&str] = &[
-    "valid_from STRING",
-    "valid_to STRING",
-    "tense STRING",
-    "viewpoint STRING",
-    "viewpoint_confidence DOUBLE",
+const REL_MIGRATIONS: &[(&str, &[&str])] = &[
+    ("MentionedIn", &["valid_from STRING", "valid_to STRING", "tense STRING", "viewpoint STRING", "viewpoint_confidence DOUBLE"]),
+    ("RelatesTo", &["valid_from STRING", "valid_to STRING", "tense STRING", "viewpoint STRING", "viewpoint_confidence DOUBLE", "memory_id INT64"]),
+    ("ConflictsWith", &["valid_from STRING", "valid_to STRING", "tense STRING", "viewpoint STRING", "viewpoint_confidence DOUBLE"]),
+    ("Supersedes", &["valid_from STRING", "valid_to STRING", "tense STRING", "viewpoint STRING", "viewpoint_confidence DOUBLE"]),
 ];
 
 pub struct Store {
@@ -175,11 +174,11 @@ impl Store {
             for stmt in SCHEMA_STATEMENTS {
                 conn.query(stmt)?.for_each(drop);
             }
-            for table in ["MentionedIn", "RelatesTo", "ConflictsWith", "Supersedes"] {
-                for col in REL_MIGRATIONS {
+            for (table, cols) in REL_MIGRATIONS {
+                for col in *cols {
                     let _ = conn
                         .query(&format!("ALTER TABLE {table} ADD IF NOT EXISTS {col}"))
-                        .map(|mut r| r.for_each(drop));
+                        .map(|r| r.for_each(drop));
                 }
             }
             // Full-text search over Memory.content (porter stemmer).
@@ -342,6 +341,7 @@ impl Store {
         &self,
         src_id: i64,
         dst_id: i64,
+        memory_id: i64,
         relation_type: &str,
         confidence: f64,
         meta: &EdgeMeta,
@@ -350,10 +350,11 @@ impl Store {
             return Ok(());
         }
         let rows = self.run(
-            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) WHERE a.id = $src AND b.id = $dst AND r.relation_type = $t RETURN r.confidence LIMIT 1",
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) WHERE a.id = $src AND b.id = $dst AND r.memory_id = $mid AND r.relation_type = $t RETURN r.confidence LIMIT 1",
             vec![
                 ("src", Value::Int64(src_id)),
                 ("dst", Value::Int64(dst_id)),
+                ("mid", Value::Int64(memory_id)),
                 ("t", Value::String(relation_type.to_string())),
             ],
         )?;
@@ -361,10 +362,11 @@ impl Store {
             return Ok(());
         }
         self.run(
-            "MATCH (a:Entity), (b:Entity) WHERE a.id = $src AND b.id = $dst CREATE (a)-[:RelatesTo {relation_type: $t, confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(b)",
+            "MATCH (a:Entity), (b:Entity) WHERE a.id = $src AND b.id = $dst CREATE (a)-[:RelatesTo {memory_id: $mid, relation_type: $t, confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(b)",
             vec![
                 ("src", Value::Int64(src_id)),
                 ("dst", Value::Int64(dst_id)),
+                ("mid", Value::Int64(memory_id)),
                 ("t", Value::String(relation_type.to_string())),
                 ("conf", Value::Double(confidence)),
                 ("vf", Value::String(meta.valid_from.clone())),
@@ -386,7 +388,7 @@ impl Store {
         rows.iter().map(|r| Ok((as_string(&r[0])?, as_string(&r[1])?))).collect()
     }
 
-    pub fn link_cooccur(&self, a: i64, b: i64, confidence: f64, meta: &EdgeMeta) -> Result<()> {
+    pub fn link_cooccur(&self, a: i64, b: i64, memory_id: i64, confidence: f64, meta: &EdgeMeta) -> Result<()> {
         if a == b {
             return Ok(());
         }
@@ -397,10 +399,11 @@ impl Store {
         )?;
         if rows.is_empty() {
             self.run(
-                "MATCH (x:Entity), (y:Entity) WHERE x.id = $lo AND y.id = $hi CREATE (x)-[:RelatesTo {relation_type: 'coOccurs', confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(y)",
+                "MATCH (x:Entity), (y:Entity) WHERE x.id = $lo AND y.id = $hi CREATE (x)-[:RelatesTo {memory_id: $mid, relation_type: 'coOccurs', confidence: $conf, valid_from: $vf, valid_to: $vt, tense: $tense, viewpoint: $vp, viewpoint_confidence: $vpc}]->(y)",
                 vec![
                     ("lo", Value::Int64(lo)),
                     ("hi", Value::Int64(hi)),
+                    ("mid", Value::Int64(memory_id)),
                     ("conf", Value::Double(confidence)),
                     ("vf", Value::String(meta.valid_from.clone())),
                     ("vt", Value::String(meta.valid_to.clone())),
@@ -411,6 +414,34 @@ impl Store {
             )?;
         }
         Ok(())
+    }
+
+    /// Known-true interval + tense of a memory, recovered from its RelatesTo
+    /// edges (all of a fact's edges share one EdgeMeta). Empty strings mean
+    /// unknown. Used to tell succession ("CEO until 2011" vs "CEO since
+    /// 2025") apart from genuine contradiction.
+    pub fn memory_temporal_scope(&self, memory_id: i64) -> Result<(String, String, String)> {
+        let rows = self.run(
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) WHERE r.memory_id = $mid RETURN r.valid_from, r.valid_to, r.tense",
+            vec![("mid", Value::Int64(memory_id))],
+        )?;
+        let mut from = String::new();
+        let mut to = String::new();
+        let mut tense = String::new();
+        for r in &rows {
+            let f = as_string(&r[0]).unwrap_or_default();
+            let t = as_string(&r[1]).unwrap_or_default();
+            if !f.is_empty() && (from.is_empty() || f < from) {
+                from = f;
+            }
+            if !t.is_empty() && (to.is_empty() || t > to) {
+                to = t;
+            }
+            if tense.is_empty() {
+                tense = as_string(&r[2]).unwrap_or_default();
+            }
+        }
+        Ok((from, to, tense))
     }
 
     pub fn link_conflict(&self, new_id: i64, old_id: i64, cues: &[String], meta: &EdgeMeta) -> Result<()> {

@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS rel_MentionedIn(
 CREATE TABLE IF NOT EXISTS rel_RelatesTo(
   src_id INTEGER NOT NULL REFERENCES node_Entity(id),
   dst_id INTEGER NOT NULL REFERENCES node_Entity(id),
+  memory_id INTEGER NOT NULL DEFAULT -1,
   relation_type TEXT NOT NULL DEFAULT 'coOccurs',
   confidence REAL NOT NULL DEFAULT 0.5,
   valid_from TEXT NOT NULL DEFAULT '',
@@ -212,6 +213,7 @@ impl IntakeDb {
                 let _ = conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col}"));
             }
         }
+        let _ = conn.execute_batch("ALTER TABLE rel_RelatesTo ADD COLUMN memory_id INTEGER");
         // Sync identity in the extension is the normalized absolute path.
         let abs = std::path::Path::new(path)
             .canonicalize()
@@ -431,6 +433,7 @@ impl IntakeDb {
         intake_id: i64,
         a_staged_id: i64,
         b_staged_id: i64,
+        memory_staged_id: i64,
         confidence: f64,
         meta: &crate::store::EdgeMeta,
     ) -> Result<()> {
@@ -444,9 +447,9 @@ impl IntakeDb {
             (b_staged_id, a_staged_id)
         };
         self.conn.execute(
-            "INSERT INTO rel_RelatesTo(src_id, dst_id, relation_type, confidence, valid_from, valid_to, tense, viewpoint, viewpoint_confidence)
-             VALUES (?1, ?2, 'coOccurs', ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![lo, hi, confidence, meta.valid_from, meta.valid_to, meta.tense, meta.viewpoint, meta.viewpoint_confidence],
+            "INSERT INTO rel_RelatesTo(src_id, dst_id, memory_id, relation_type, confidence, valid_from, valid_to, tense, viewpoint, viewpoint_confidence)
+             VALUES (?1, ?2, ?3, 'coOccurs', ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![lo, hi, memory_staged_id, confidence, meta.valid_from, meta.valid_to, meta.tense, meta.viewpoint, meta.viewpoint_confidence],
         )?;
         self.track_edge("rel_RelatesTo", intake_id)
     }
@@ -458,6 +461,7 @@ impl IntakeDb {
         intake_id: i64,
         src_staged_id: i64,
         dst_staged_id: i64,
+        memory_staged_id: i64,
         relation_type: &str,
         confidence: f64,
         meta: &crate::store::EdgeMeta,
@@ -466,9 +470,9 @@ impl IntakeDb {
             return Ok(());
         }
         self.conn.execute(
-            "INSERT INTO rel_RelatesTo(src_id, dst_id, relation_type, confidence, valid_from, valid_to, tense, viewpoint, viewpoint_confidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![src_staged_id, dst_staged_id, relation_type, confidence,
+            "INSERT INTO rel_RelatesTo(src_id, dst_id, memory_id, relation_type, confidence, valid_from, valid_to, tense, viewpoint, viewpoint_confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![src_staged_id, dst_staged_id, memory_staged_id, relation_type, confidence,
                 meta.valid_from, meta.valid_to, meta.tense, meta.viewpoint, meta.viewpoint_confidence],
         )?;
         self.track_edge("rel_RelatesTo", intake_id)
@@ -827,16 +831,16 @@ pub fn replicate_to_store(intake: &IntakeDb, store: &Store) -> Result<SyncStats>
         // Entity co-occurrences + typed relations (same staging table;
         // directed typed edges keep their endpoint order).
         {
-            let rows: Vec<(i64, i64, String, f64, String, String, String, String, f64)> = intake.collect(
-                "SELECT r.src_id, r.dst_id, r.relation_type, r.confidence,
+            let rows: Vec<(i64, i64, i64, String, f64, String, String, String, String, f64)> = intake.collect(
+                "SELECT r.src_id, r.dst_id, r.memory_id, r.relation_type, r.confidence,
                         r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence FROM rel_RelatesTo r
                  JOIN stage_edge_map e ON e.rel_table = 'rel_RelatesTo' AND e.rowid = r.rowid
                  WHERE e.intake_id = ?1",
                 intake_id,
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
             )?;
-            for (a, b, rel_type, conf, vf, vt, tense, vp, vpc) in rows {
-                if let (Some(x), Some(y)) = (ent_lb.get(&a), ent_lb.get(&b)) {
+            for (a, b, mem_staged, rel_type, conf, vf, vt, tense, vp, vpc) in rows {
+                if let (Some(x), Some(y), Some(mid)) = (ent_lb.get(&a), ent_lb.get(&b), mem_lb.get(&mem_staged)) {
                     let meta = crate::store::EdgeMeta {
                         valid_from: vf,
                         valid_to: vt,
@@ -845,9 +849,9 @@ pub fn replicate_to_store(intake: &IntakeDb, store: &Store) -> Result<SyncStats>
                         viewpoint_confidence: vpc,
                     };
                     if rel_type == "coOccurs" {
-                        store.link_cooccur(*x, *y, conf, &meta)?;
+                        store.link_cooccur(*x, *y, *mid, conf, &meta)?;
                     } else {
-                        store.link_typed_relation(*x, *y, &rel_type, conf, &meta)?;
+                        store.link_typed_relation(*x, *y, *mid, &rel_type, conf, &meta)?;
                     }
                 }
             }

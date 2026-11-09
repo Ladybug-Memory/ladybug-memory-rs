@@ -22,7 +22,7 @@ use crate::chunker::{LogicalChunker, split_sentences};
 use crate::classify::{classify, is_acknowledgment};
 use crate::conflicts::{FactVerdict, decide};
 use crate::model::Extractor;
-use crate::resolve::{KnownEntity, compare, resolve, bind_pronouns, is_pronoun};
+use crate::resolve::{KnownEntity, bind_pronouns, compare, resolve};
 use time::OffsetDateTime;
 use crate::store::Store;
 use crate::types::{
@@ -387,6 +387,31 @@ impl<'s> Pipeline<'s> {
         let stmt_date = OffsetDateTime::now_utc().date().to_string();
         let (valid_from, valid_to, tense) = resolve_time_range(&fact_text, &compared, &stmt_date);
 
+        // Temporal succession is not contradiction: drop conflict pairs
+        // whose known-true intervals are disjoint (touching counts: tenure
+        // handover). "CEO until 2011" vs "CEO in 2025" is succession, not a
+        // conflict — even though the year-mismatch cue fires. Unknown bounds
+        // still flag (human adjudicates via review).
+        if matches!(decision, FactDecision::Conflict { .. }) {
+            let mut kept: Vec<(i64, Vec<String>)> = Vec::new();
+            for (old, cues) in std::mem::take(&mut conflicts) {
+                let (of, ot, _) = self.store.memory_temporal_scope(old).unwrap_or_default();
+                if !is_succession(&of, &ot, &valid_from, &valid_to) {
+                    kept.push((old, cues));
+                }
+            }
+            if kept.is_empty() {
+                decision = FactDecision::New { reason: "successive holders with disjoint tenure".into() };
+                status = MemoryStatus::Active;
+            } else {
+                decision = FactDecision::Conflict {
+                    with: kept.iter().map(|(id, _)| *id).collect(),
+                    cues: kept.iter().flat_map(|(_, c)| c.clone()).collect(),
+                };
+                conflicts = kept;
+            }
+        }
+
         Ok(FactPlan {
             fact_text,
             extracted,
@@ -523,13 +548,13 @@ impl<'s> Pipeline<'s> {
             for rel in &relations {
                 if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
                     if hid != tid {
-                        self.store.link_typed_relation(hid, tid, &rel.relation_type, rel.score as f64, &meta)?;
+                        self.store.link_typed_relation(hid, tid, id, &rel.relation_type, rel.score as f64, &meta)?;
                     }
                 }
             }
             for a in 0..entity_ids.len() {
                 for b in (a + 1)..entity_ids.len() {
-                    self.store.link_cooccur(entity_ids[a], entity_ids[b], 0.5, &meta)?;
+                    self.store.link_cooccur(entity_ids[a], entity_ids[b], id, 0.5, &meta)?;
                 }
             }
             for (old, cues) in &conflicts {
@@ -741,13 +766,13 @@ impl<'s> Pipeline<'s> {
         for rel in &relations {
             if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
                 if hid != tid {
-                    intake.stage_typed_relation(intake_id, hid, tid, &rel.relation_type, rel.score as f64, &meta)?;
+                    intake.stage_typed_relation(intake_id, hid, tid, staged_mem, &rel.relation_type, rel.score as f64, &meta)?;
                 }
             }
         }
         for a in 0..entity_ids.len() {
             for b in (a + 1)..entity_ids.len() {
-                intake.stage_cooccur(intake_id, entity_ids[a], entity_ids[b], 0.5, &meta)?;
+                intake.stage_cooccur(intake_id, entity_ids[a], entity_ids[b], staged_mem, 0.5, &meta)?;
             }
         }
         for (old, old_cues) in &conflicts {
@@ -1017,6 +1042,15 @@ impl<'s> Pipeline<'s> {
     }
 }
 
+/// Succession check for conflict suppression: true when the old and new
+/// known-true intervals are disjoint (touching counts: tenure handover).
+/// Empty bounds mean unknown, and unknown never proves disjointness —
+/// those pairs keep flagging for human review.
+fn is_succession(old_from: &str, old_to: &str, new_from: &str, new_to: &str) -> bool {
+    (!new_to.is_empty() && !old_from.is_empty() && new_to <= old_from)
+        || (!old_to.is_empty() && !new_from.is_empty() && old_to <= new_from)
+}
+
 /// Job-title nouns that license implicit-organization completion for a
 /// lone person ("X is the CEO" with no org mentioned). Normalized forms;
 /// "co founder" covers the hyphenated surface.
@@ -1207,4 +1241,23 @@ fn byte_to_char_map(s: &str) -> Vec<usize> {
 
 fn byte_to_char(map: &[usize], byte: usize) -> usize {
     map.get(byte.min(map.len().saturating_sub(1))).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_succession;
+
+    #[test]
+    fn succession_bounds() {
+        // Disjoint, old before new.
+        assert!(is_succession("", "2011-12-31", "2025-01-01", "2025-12-31"));
+        // Touching at a point counts as handover, not overlap.
+        assert!(is_succession("", "2026-11-08", "2026-11-08", ""));
+        // Overlap.
+        assert!(!is_succession("2019-01-01", "2021-12-31", "2020-01-01", ""));
+        assert!(!is_succession("2026-11-08", "", "2026-11-08", ""));
+        // Unknown on the touching side: cannot prove disjoint.
+        assert!(!is_succession("", "2026-11-08", "", ""));
+        assert!(!is_succession("", "", "", ""));
+    }
 }
