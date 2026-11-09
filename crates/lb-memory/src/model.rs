@@ -16,13 +16,14 @@ pub trait Extractor {
     fn classify(&mut self, _text: &str, _task: &str, _labels: &[String]) -> Result<Vec<(String, f32)>> {
         Ok(vec![])
     }
-    /// Typed relations between entity mentions in `text`, given the entity
-    /// labels in play. Default: unsupported (no typed edges).
+    /// Typed relations between the given clean extracted mentions.
+    /// Default: unsupported (no typed edges).
     fn extract_relations(
         &mut self,
         _text: &str,
         _entity_labels: &[String],
         _relations: &[crate::types::RelationSpec],
+        _mentions: &[crate::types::ScoredMention],
         _threshold: f32,
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         Ok(vec![])
@@ -78,6 +79,7 @@ impl Extractor for GlinerExtractor {
         text: &str,
         entity_labels: &[String],
         relations: &[crate::types::RelationSpec],
+        mentions: &[crate::types::ScoredMention],
         threshold: f32,
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         if self.model.is_none() {
@@ -99,7 +101,19 @@ impl Extractor for GlinerExtractor {
                 allow_self: false,
             })
             .collect();
-        let out = model.extract_relations(text, entity_labels, &specs, threshold)?;
+        // Clean extracted mentions become the scorer's pairs directly
+        // (char offsets index this same text). No candidate pools, no
+        // top-k selection, no swarm to filter downstream.
+        let inputs: Vec<gliner_onnx::MentionInput> = mentions
+            .iter()
+            .map(|m| gliner_onnx::MentionInput {
+                entity_type: m.entity_type.clone(),
+                confidence: m.confidence,
+                char_start: m.start,
+                char_end: m.end,
+            })
+            .collect();
+        let out = model.extract_relations(text, entity_labels, &specs, &inputs, threshold)?;
         Ok(out
             .into_iter()
             .map(|r| crate::types::ScoredRelation {
@@ -144,6 +158,7 @@ impl Extractor for FakeExtractor {
         _text: &str,
         _entity_labels: &[String],
         _relations: &[crate::types::RelationSpec],
+        _mentions: &[crate::types::ScoredMention],
         _threshold: f32,
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         Ok(self.relations.clone())

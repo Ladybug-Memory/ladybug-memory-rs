@@ -627,6 +627,7 @@ impl GlinerOnnx {
         text: &str,
         entity_labels: &[String],
         relations: &[RelationSpec],
+        mentions: &[MentionInput],
         threshold: f32,
     ) -> Result<Vec<TypedRelation>> {
         anyhow::ensure!(!entity_labels.is_empty(), "entity labels needed for endpoint typing");
@@ -672,27 +673,44 @@ impl GlinerOnnx {
             "rel_marker_mask" => Tensor::from_array((vec![1, 2 * n_rel as i64], vec![1.0f32; 2 * n_rel]))?.upcast()
         ])?;
 
-        // Entity candidates: (span, prob) per [E] query for endpoint typing.
-        let (_, pair_logits) = mouts["pair_logits"].try_extract_tensor::<f32>()?;
-        let (_, pair_indices) = mouts["pair_indices"].try_extract_tensor::<i64>()?;
-        let (_, pair_valid_u8) = mouts["pair_valid"].try_extract_tensor::<u8>()?;
         let (_, text_states) = mouts["text_states"].try_extract_tensor::<f32>()?;
         let (_, role_states) = mouts["rel_role_states"].try_extract_tensor::<f32>()?;
-        let pool = pair_logits.len() / n_ent.max(1);
-        // Per-query candidate lists (torch: flat over queries x candidates).
-        let mut cands: Vec<Vec<(usize, usize, f32, bool)>> = vec![Vec::new(); n_ent];
-        for qi in 0..n_ent {
-            for c in 0..pool {
-                let k = qi * pool + c;
-                let s = pair_indices[k * 2] as usize;
-                let e = pair_indices[k * 2 + 1] as usize;
-                let p = sigmoid(pair_logits[k]);
-                let v = pair_valid_u8[k] != 0;
-                cands[qi].push((s, e, p, v));
+
+        // Map clean extracted mentions onto this call's word routing via
+        // char offsets (same text, same splitter: exact alignment).
+        // Unmappable mentions are skipped, never guessed.
+        struct MSpan {
+            ws: usize,
+            we: usize,
+            entity_type: String,
+            conf: f32,
+        }
+        let mut mspans: Vec<MSpan> = Vec::new();
+        for m in mentions {
+            if m.char_end <= m.char_start {
+                continue;
+            }
+            let mut ws_opt: Option<usize> = None;
+            let mut we = 0usize;
+            for (i, w) in built.words.iter().enumerate() {
+                if w.start < m.char_end && w.end > m.char_start {
+                    if ws_opt.is_none() {
+                        ws_opt = Some(i);
+                    }
+                    we = i + 1;
+                }
+            }
+            if let Some(ws) = ws_opt {
+                if we > ws {
+                    mspans.push(MSpan {
+                        ws,
+                        we,
+                        entity_type: m.entity_type.clone(),
+                        conf: m.confidence,
+                    });
+                }
             }
         }
-        // label -> [E] query index.
-        let qid_of = |name: &str| entity_labels.iter().position(|l| l == name);
 
         #[derive(Clone)]
         struct Pair {
@@ -704,87 +722,45 @@ impl GlinerOnnx {
             hp: f32,
             tp: f32,
         }
-        let mut pairs: Vec<Pair> = Vec::new();
+        // All ordered mention pairs, type-filtered per relation, capped by
+        // confidence product. No candidate pools, no top-k, no swallow
+        // heuristics: the endpoints are already clean.
+        let mut order: Vec<(f32, usize, usize, usize)> = Vec::new();
         for (ri, spec) in relations.iter().enumerate() {
-            let hqs: Vec<usize> = spec.head_types.iter().filter_map(|t| qid_of(t)).collect();
-            let tqs: Vec<usize> = spec.tail_types.iter().filter_map(|t| qid_of(t)).collect();
-            if hqs.is_empty() || tqs.is_empty() {
-                continue;
-            }
-            // Flattened candidate pools over the allowed queries, mirroring
-            // torch's query-masked flat selection (order: query-major).
-            let mut hpool: Vec<(usize, usize, f32, bool)> = Vec::new();
-            let mut tpool: Vec<(usize, usize, f32, bool)> = Vec::new();
-            for &q in &hqs {
-                hpool.extend(cands[q].iter().cloned());
-            }
-            for &q in &tqs {
-                tpool.extend(cands[q].iter().cloned());
-            }
-            let heads = select_roles(&hpool, HEADS_PER_RELATION);
-            let tails = select_roles(&tpool, TAILS_PER_RELATION);
-            // Capped cross product, best hp*tp first.
-            let mut cross: Vec<(f32, usize, usize)> = Vec::new();
-            for (hi, h) in heads.iter().enumerate() {
-                for (ti, t) in tails.iter().enumerate() {
-                    if !h.3 || !t.3 {
+            for (hi, h) in mspans.iter().enumerate() {
+                if !spec.head_types.iter().any(|t| t == &h.entity_type) {
+                    continue;
+                }
+                for (ti, t) in mspans.iter().enumerate() {
+                    if hi == ti && !spec.allow_self {
                         continue;
                     }
-                    let same = h.0 == t.0 && h.1 == t.1;
-                    if same && !spec.allow_self {
+                    if (h.ws, h.we) == (t.ws, t.we) && !spec.allow_self {
                         continue;
                     }
-                    cross.push((h.2 * t.2, hi, ti));
+                    if !spec.tail_types.iter().any(|t2| t2 == &t.entity_type) {
+                        continue;
+                    }
+                    order.push((h.conf * t.conf, ri, hi, ti));
                 }
             }
-            cross.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-            cross.truncate(PAIR_CAP);
-            for (_, hi, ti) in cross {
-                let h = &heads[hi];
-                let t = &tails[ti];
-                pairs.push(Pair {
-                    rel: ri,
-                    hs: h.0,
-                    he: h.1,
-                    ts: t.0,
-                    te: t.1,
-                    hp: h.2,
-                    tp: t.2,
-                });
-            }
         }
-        // Drop pairs whose between-span swallows another real-world
-        // mention: the scorer liked a shared word, not a direct relation
-        // ("[Jobs] was CEO of Apple until [2011]" must not yield a CEO edge
-        // to 2011). Descriptors (technology/concept/date) don't block — a
-        // "CEO" technology tag must not veto the (person, org) edge around
-        // it. Overlapping spans are left for dedup.
-        let real_mention = |qi: usize| -> bool {
-            matches!(
-                entity_labels.get(qi).map(|s| s.as_str()),
-                Some("person" | "organization" | "location" | "product" | "event")
-            )
-        };
-        pairs.retain(|p| {
-            let (lo, hi) = if p.he <= p.ts {
-                (p.he, p.ts)
-            } else if p.te <= p.hs {
-                (p.te, p.hs)
-            } else {
-                return true;
-            };
-            !cands.iter().enumerate().any(|(qi, qs)| {
-                real_mention(qi)
-                    && qs.iter().any(|&(s, e, prob, valid)| {
-                        valid
-                            && prob >= ARGUMENT_THRESHOLD
-                            && s >= lo
-                            && e <= hi
-                            && (s, e) != (p.hs, p.he)
-                            && (s, e) != (p.ts, p.te)
-                    })
-            })
-        });
+        order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+order.truncate(MAX_PAIRS);
+        let mut pairs: Vec<Pair> = Vec::new();
+        for (_, ri, hi, ti) in order {
+            let h = &mspans[hi];
+            let t = &mspans[ti];
+            pairs.push(Pair {
+                rel: ri,
+                hs: h.ws,
+                he: h.we,
+                ts: t.ws,
+                te: t.we,
+                hp: h.conf,
+                tp: t.conf,
+            });
+        }
         if pairs.is_empty() {
             return Ok(vec![]);
         }
@@ -844,14 +820,18 @@ impl GlinerOnnx {
             }
             let (hs, he) = match (surf(p.hs, p.he), surf(p.ts, p.te)) {
                 (Some(h), Some(t)) => (h, t),
-                _ => continue,
+                _ => {
+                    continue;
+                }
             };
             let (ht, hcs, hce) = hs;
             let (tt, tcs, tce) = he;
             let rel_type = if open_mode {
                 match mine_relation_phrase(&chars, hcs, hce, tcs, tce) {
                     Some(phrase) => phrase,
-                    None => continue,
+                    None => {
+                        continue;
+                    }
                 }
             } else {
                 relations[p.rel].relation_type.clone()
@@ -982,6 +962,17 @@ pub struct BuiltInputs {
     pub ends: Vec<usize>,
 }
 
+/// A clean extracted mention to score relations over. Char offsets index
+/// the same `text` the prompt is built from, so spans map exactly onto this
+/// call's word routing (no cross-call index arithmetic, no sloppy spans).
+#[derive(Debug, Clone)]
+pub struct MentionInput {
+    pub entity_type: String,
+    pub confidence: f32,
+    pub char_start: usize,
+    pub char_end: usize,
+}
+
 /// One relation type to score, with head/tail entity-type constraints.
 /// Zero-shot: any type name works; the scorer reads it from the `[P]` block
 /// through the contextualized `[R]` role states.
@@ -1029,53 +1020,23 @@ pub struct RelatedMention {
 }
 
 /// Generic relation for open information extraction: with no declared
-/// schema, all entity pairs are scored under one `related` query and the
+/// schema, all entity pairs are scored under one generic query and the
 /// relation phrase is mined from the surface between the endpoint spans.
-pub const OPEN_RELATION: &str = "related";
+/// The query word never surfaces in output (labels always come from mined
+/// spans); "associated" was chosen empirically for scoring separation
+/// over alternatives like "related" (0.48 vs 0.33) or "connected".
+pub const OPEN_RELATION: &str = "associated";
 
-/// Checkpoint relation settings (`fastino/gliner2.5-base-v1` config):
-/// top-32 head/tail mentions per type at candidate prob >= 0.2,
-/// capped 64-pair cross product, sigmoid temperature 1.0.
-const HEADS_PER_RELATION: usize = 32;
-const TAILS_PER_RELATION: usize = 32;
-const PAIR_CAP: usize = 64;
-const ARGUMENT_THRESHOLD: f32 = 0.2;
+/// Cap on scored pairs per call (by confidence product); far above
+/// what fits in a prompt, just backpressure for pathological inputs.
+const MAX_PAIRS: usize = 256;
 const RELATION_TEMPERATURE: f32 = 1.0;
-
-/// Torch `generate_batched` role selection, decode-only path: stable order
-/// by (end, start), rank by score desc with below-threshold (`ARGUMENT_`
-/// `THRESHOLD`) and invalid slots floored, take exactly `requested` slots
-/// (padding invalid). Pair validity is enforced on the cross product.
-fn select_roles(cands: &[(usize, usize, f32, bool)], requested: usize) -> Vec<(usize, usize, f32, bool)> {
-    let n = cands.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| cands[a].1.cmp(&cands[b].1));
-    order.sort_by(|&a, &b| cands[a].0.cmp(&cands[b].0));
-    let score_of = |pos: usize| -> f32 {
-        let c = &cands[order[pos]];
-        if c.3 && c.2 >= ARGUMENT_THRESHOLD {
-            c.2
-        } else {
-            f32::NEG_INFINITY
-        }
-    };
-    let mut rank: Vec<usize> = (0..n).collect();
-    rank.sort_by(|&a, &b| score_of(b).partial_cmp(&score_of(a)).unwrap().then(a.cmp(&b)));
-    let mut out = Vec::with_capacity(requested);
-    for k in 0..requested.min(n) {
-        out.push(cands[order[rank[k]]]);
-    }
-    while out.len() < requested {
-        out.push((0, 0, 0.0, false));
-    }
-    out
-}
 
 /// Mine an open-IE relation phrase from the surface between two endpoint
 /// char spans (textual order): lowercase, trim edge punctuation, strip
 /// leading auxiliaries/determiners/relative pronouns ("was founded by" →
 /// "founded by", ", who runs" → "runs"). Returns None for overlapping
-/// spans, empty/pure-glue surfaces, or runaway (>40 char) spans.
+/// spans, empty/pure-glue surfaces, or runaway (>80 char) spans.
 fn mine_relation_phrase(text: &[char], a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> Option<String> {
     let (lo, hi) = if a_end <= b_start {
         (a_end, b_start)
@@ -1087,7 +1048,21 @@ fn mine_relation_phrase(text: &[char], a_start: usize, a_end: usize, b_start: us
     if hi > text.len() || lo >= hi {
         return None;
     }
-    let raw: String = text[lo..hi].iter().collect();
+    // Strip parenthesized asides: they are non-restrictive by definition
+    // and can never carry the main predicate ("(born ... 1967) was an
+    // American ..." -> the relation lives outside the parens).
+    let mut nosub = String::with_capacity(hi - lo);
+    let mut depth = 0usize;
+    for &c in &text[lo..hi] {
+        if c == '(' {
+            depth += 1;
+        } else if c == ')' && depth > 0 {
+            depth -= 1;
+        } else if depth == 0 {
+            nosub.push(c);
+        }
+    }
+    let raw: String = nosub;
     let mut words: Vec<&str> = raw.split_whitespace().collect();
     // Trim edge punctuation per word, drop empties.
     let mut clean: Vec<String> = Vec::new();
@@ -1112,7 +1087,7 @@ fn mine_relation_phrase(text: &[char], a_start: usize, a_end: usize, b_start: us
         return None;
     }
     let phrase = clean.join(" ");
-    if phrase.len() > 40 {
+    if phrase.len() > 80 {
         return None;
     }
     Some(phrase)

@@ -692,6 +692,38 @@ mod sqlite_first {
     }
 
     #[test]
+    fn typed_date_endpoints_are_dropped() {
+        // Dates bound relations (valid_from/to); they are never edge
+        // endpoints, even when the scorer proposes them.
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        let mut ex = FakeExtractor {
+            mentions: vec![
+                mention("Steve Jobs", "person", 0.99),
+                mention("Apple", "organization", 0.98),
+                mention("1976", "date", 0.9),
+            ],
+            classify_scores: vec![("fact".to_string(), 0.9)],
+            relations: vec![
+                scirel("Steve Jobs", "Apple", "founded"),
+                scirel("Steve Jobs", "1976", "until"),
+            ],
+        };
+        pipe.remember(&mut ex, "Steve Jobs founded Apple in 1976.", &scope(), None, prov()).unwrap();
+        let edges = store.relates_to_labels().unwrap();
+        // The real typed edge survives (canonicalized).
+        assert!(
+            edges.iter().any(|(a, b, t)| a == "Steve Jobs" && b == "Apple" && t == "founded by"),
+            "{edges:?}"
+        );
+        // No typed edge touches the date; co-occurrences may.
+        assert!(
+            !edges.iter().any(|(a, b, t)| t != "coOccurs" && (a == "1976" || b == "1976")),
+            "{edges:?}"
+        );
+    }
+
+    #[test]
     fn time_range_present_and_past_defaults() {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());

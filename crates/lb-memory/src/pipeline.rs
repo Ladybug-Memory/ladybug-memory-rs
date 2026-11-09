@@ -323,13 +323,35 @@ impl<'s> Pipeline<'s> {
         // back to co-occurrence.
         let mut relations = Vec::new();
         if duplicate_of.is_none() && !resolved.is_empty() {
-            if let Ok(rs) = extractor.extract_relations(
-                &fact_text,
-                &default_entity_labels(),
-                &[],
-                self.opts.relation_threshold,
-            ) {
-                relations = rs;
+            // Pairs come straight from the cleaned extracted mentions
+            // (mapped onto each call's word routing by character offset):
+            // no candidate pools, no top-k, no swallow heuristics.
+            // Unmappable mentions are skipped, never guessed.
+            // Scored per sentence: the pair scorer degrades badly on long
+            // inputs (same pair scores 0.87 in-sentence vs <0.3 in a
+            // paragraph), so each sentence is an independent call.
+            for (sent_text, sent_start, sent_end) in crate::chunker::split_sentences(&fact_text) {
+                let mut mentions: Vec<ScoredMention> = Vec::new();
+                for c in compared.iter() {
+                    let m = &c.mention;
+                    if m.start >= sent_start && m.end <= sent_end && m.end > m.start {
+                        let mut shifted = m.clone();
+                        shifted.start -= sent_start;
+                        shifted.end -= sent_start;
+                        shifted.word_start = 0;
+                        shifted.word_end = 0;
+                        mentions.push(shifted);
+                    }
+                }
+                if let Ok(rs) = extractor.extract_relations(
+                    &sent_text,
+                    &default_entity_labels(),
+                    &[],
+                    &mentions,
+                    self.opts.relation_threshold,
+                ) {
+                    relations.extend(rs);
+                }
             }
             // Implicit argument completion: a lone person plus a role noun
             // ("... is the CEO") links the most recent organization (else
@@ -380,7 +402,14 @@ impl<'s> Pipeline<'s> {
                 rel.relation_type = canonical;
             }
         }
-
+        // Date endpoints are not typed relations: dates bound a relation
+        // (valid_from/to), they don't participate in one. Drop edges whose
+        // endpoint is a resolved date mention ("until 2011" must not yield
+        // a CEO edge *to* 2011).
+        relations.retain(|rel| {
+            !is_date_endpoint(&rel.head_text, &compared, known)
+                && !is_date_endpoint(&rel.tail_text, &compared, known)
+        });
         // Temporal scope (step 4d): explicit dates first, tense + "now" cues
         // as fallback. Bounds are the known-true interval, not the full
         // history: "" means unknown, not unbounded.
@@ -534,10 +563,9 @@ impl<'s> Pipeline<'s> {
                     )?;
                 }
             }
-            // Typed relations first: endpoint surfaces resolve through the
-            // fact's mentions, falling back to the stored schema (implicit
-            // targets like a recent org were never mentioned in this fact,
-            // so they only live in `known`).
+            // Typed relations first: endpoint text is a clean extracted
+            // mention, so exact normalized lookup suffices (plus the stored
+            // schema for implicit targets never mentioned in this fact).
             let endpoint_id = |surface: &str| -> Option<i64> {
                 let norm = crate::resolve::normalize(surface);
                 if let Some((id, _)) = node_of.get(&norm) {
@@ -545,9 +573,18 @@ impl<'s> Pipeline<'s> {
                 }
                 known.iter().find(|k| k.normalized == norm).map(|k| k.id)
             };
-            for rel in &relations {
+            // Collapse near-duplicate edges that differ only in sloppy
+            // span text ("J", "J. Robert", "J. Robert Oppenheimer" all snap
+            // to Jobs): same (type, head, tail) keeps the best score.
+            let mut order: Vec<usize> = (0..relations.len()).collect();
+            order.sort_by(|&a, &b| {
+                relations[b].score.partial_cmp(&relations[a].score).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
+            for &k in &order {
+                let rel = &relations[k];
                 if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
-                    if hid != tid {
+                    if hid != tid && seen.insert((rel.relation_type.clone(), hid, tid)) {
                         self.store.link_typed_relation(hid, tid, id, &rel.relation_type, rel.score as f64, &meta)?;
                     }
                 }
@@ -754,8 +791,7 @@ impl<'s> Pipeline<'s> {
                 )?;
             }
         }
-        // Same endpoint resolution as the direct path: fact mentions
-        // first, stored schema as fallback for implicit targets.
+        // Same endpoint resolution as the direct path.
         let endpoint_id = |surface: &str| -> Option<i64> {
             let norm = crate::resolve::normalize(surface);
             if let Some(id) = node_of.get(&norm) {
@@ -763,9 +799,17 @@ impl<'s> Pipeline<'s> {
             }
             known.iter().find(|k| k.normalized == norm).map(|k| k.id)
         };
-        for rel in &relations {
+        // Same entity-level dedup as the direct path (see commit_plan):
+        // sloppy spans collapse onto one typed edge per (type, head, tail).
+        let mut order: Vec<usize> = (0..relations.len()).collect();
+        order.sort_by(|&a, &b| {
+            relations[b].score.partial_cmp(&relations[a].score).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
+        for &k in &order {
+            let rel = &relations[k];
             if let (Some(hid), Some(tid)) = (endpoint_id(&rel.head_text), endpoint_id(&rel.tail_text)) {
-                if hid != tid {
+                if hid != tid && seen.insert((rel.relation_type.clone(), hid, tid)) {
                     intake.stage_typed_relation(intake_id, hid, tid, staged_mem, &rel.relation_type, rel.score as f64, &meta)?;
                 }
             }
@@ -1066,6 +1110,30 @@ const ROLE_NOUNS: &[&'static str] = &[
 /// "is"/"now"→present, "will"→future) and "now"/"former" cues fill the
 /// gaps against the statement date. Bounds mean "known true at least
 /// during", not the full historical interval.
+/// Whether an edge endpoint is really a date: matches a resolved date
+/// mention or a known date entity (exact or substantial substring — "April"
+/// inside "April 22, 1904", but not 1-3 letter fragments like "may").
+/// Dates bound relations via valid_from/to; they are never edge endpoints.
+fn is_date_endpoint(text: &str, compared: &[ComparedEntity], known: &[KnownEntity]) -> bool {
+    let norm = crate::resolve::normalize(text);
+    if norm.is_empty() {
+        return false;
+    }
+    let date_norms = compared
+        .iter()
+        .filter(|c| c.mention.entity_type == "date")
+        .map(|c| c.normalized.clone())
+        .chain(
+            known
+                .iter()
+                .filter(|k| k.entity_type == "date")
+                .map(|k| k.normalized.clone()),
+        );
+    date_norms.into_iter().any(|d| {
+        !d.is_empty() && (d == norm || (d.contains(&norm) && norm.len() >= 4))
+    })
+}
+
 fn resolve_time_range(fact_text: &str, compared: &[ComparedEntity], stmt_date: &str) -> (String, String, String) {
     let lower = fact_text.to_lowercase();
     let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
