@@ -55,39 +55,6 @@ fn default_entity_labels() -> Vec<String> {
     crate::model::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
 }
 
-/// Crude stemmer for matching relation verbs against query words
-/// ("founded" ~ "founder-of", "works" ~ "works-at"): lowercase, strip a
-/// single common suffix, then equality or prefix match on stems >= 4 chars.
-fn stem_word(s: &str) -> String {
-    let mut w: String = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
-    for suf in ["ing", "ed", "es", "s"] {
-        if w.len() > suf.len() + 2 && w.ends_with(suf) {
-            w.truncate(w.len() - suf.len());
-            break;
-        }
-    }
-    w
-}
-
-fn relation_cue_match(relation_type: &str, query: &str) -> bool {
-    let qw: Vec<String> = query
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 1)
-        .map(stem_word)
-        .collect();
-    if qw.is_empty() {
-        return false;
-    }
-    relation_type.split('-').any(|part| {
-        let st = stem_word(part);
-        if st.len() < 4 {
-            return false;
-        }
-        qw.iter().any(|w| w.len() >= 4 && (w == &st || w.starts_with(&st) || st.starts_with(w)))
-    })
-}
-
 /// Labels for model-based fact categorization (must match `Category`).
 /// Used only when rule cues abstain (`General`) — deterministic first,
 /// model as fallback.
@@ -401,6 +368,18 @@ impl<'s> Pipeline<'s> {
             } else {
                 (String::new(), 0.0)
             };
+
+        // Canonicalize relation surfaces against the Wikidata property
+        // inventory: "great ceo of" and "ceo" both become "chief executive
+        // officer". Unmatched phrases stay open (raw surface). Applies to
+        // scored and implicit relations alike, before anything is written.
+        for rel in &mut relations {
+            if let Some((_, canonical)) =
+                crate::rel_canon::canonicalize_relation(&rel.relation_type)
+            {
+                rel.relation_type = canonical;
+            }
+        }
 
         // Temporal scope (step 4d): explicit dates first, tense + "now" cues
         // as fallback. Bounds are the known-true interval, not the full
@@ -1008,7 +987,7 @@ impl<'s> Pipeline<'s> {
                 if seen_rel.insert((other.clone(), rel.clone())) {
                     out.push(format!("{rel} via {other}"));
                 }
-                if relation_cue_match(&rel, query) {
+                if crate::rel_canon::relation_cue_match(&rel, query) {
                     boost += 0.3;
                 }
             }

@@ -5,6 +5,7 @@ pub mod classify;
 pub mod conflicts;
 pub mod model;
 pub mod pipeline;
+pub mod rel_canon;
 pub mod resolve;
 pub mod sqlite_sync;
 pub mod store;

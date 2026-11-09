@@ -490,7 +490,7 @@ mod sqlite_first {
         // Exactly one edge, typed — no coOccurs twin.
         assert_eq!(
             store.relates_to_labels().unwrap(),
-            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded".to_string())]
+            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded by".to_string())]
         );
         // Recall surfaces the relation on the hit.
         let hits = pipe.recall("who founded Apple", &scope(), 5).unwrap();
@@ -530,12 +530,32 @@ mod sqlite_first {
         assert!(reports[0].written.is_some());
         assert_eq!(
             store.relates_to_labels().unwrap(),
-            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded".to_string())]
+            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded by".to_string())]
         );
         // Re-tick converges with no duplicate edge.
         let second = pipe.sync_intake(&db, None).unwrap();
         assert_eq!(second.applied_intake, 0);
         assert_eq!(store.relates_to_labels().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn variant_phrases_collapse_to_one_canonical_label() {
+        let store = Store::ephemeral().unwrap();
+        let pipe = Pipeline::new(&store, PipelineOptions::default());
+        // "great ceo of" and "ceo" must land as the same canonical edge.
+        let mut ex = FakeExtractor {
+            mentions: vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)],
+            classify_scores: vec![("fact".to_string(), 0.9)],
+            relations: vec![scirel("Steve Jobs", "Apple", "great ceo of")],
+        };
+        pipe.remember(&mut ex, "Steve Jobs was a great CEO of Apple.", &scope(), None, prov()).unwrap();
+        ex.mentions = vec![mention("John Ternus", "person", 0.95), mention("Apple", "organization", 0.98)];
+        ex.relations = vec![scirel("John Ternus", "Apple", "ceo")];
+        pipe.remember(&mut ex, "John Ternus is the CEO of Apple.", &scope(), None, prov()).unwrap();
+        let edges = store.relates_to_labels().unwrap();
+        let kinds: std::collections::HashSet<String> =
+            edges.iter().filter(|(_, _, t)| t != &"coOccurs").map(|(_, _, t)| t.clone()).collect();
+        assert_eq!(kinds, ["chief executive officer".to_string()].into_iter().collect(), "{edges:?}");
     }
 
     #[test]
@@ -558,7 +578,7 @@ mod sqlite_first {
         let hits = pipe.recall("founder Apple", &scope(), 5).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].entry.id, winner, "typed-relation boost should outrank id order");
-        assert!(hits[0].relations.iter().any(|r| r == "founded via Steve Jobs"), "{:?}", hits[0].relations);
+        assert!(hits[0].relations.iter().any(|r| r == "founded by via Steve Jobs"), "{:?}", hits[0].relations);
     }
 
     fn scirel(head: &str, tail: &str, kind: &str) -> lb_memory::types::ScoredRelation {
@@ -646,7 +666,7 @@ mod sqlite_first {
         assert!(reports[0].written.is_some());
         let edges = store.relates_to_labels().unwrap();
         assert!(
-            edges.iter().any(|(a, b, t)| a == "John Ternus" && b == "Apple" && t == "ceo"),
+            edges.iter().any(|(a, b, t)| a == "John Ternus" && b == "Apple" && t == "chief executive officer"),
             "{edges:?}"
         );
     }
@@ -703,7 +723,7 @@ mod sqlite_first {
         pipe.remember(&mut ex, "Steve Jobs was a great CEO of Apple.", &scope(), None, prov()).unwrap();
         let edges = store.relates_to_full().unwrap();
         let found = edges.iter().find(|(_, _, kind, _, _, _, _, vp, vpc)| {
-            kind == &"founded" && vp == &"opinion" && (*vpc - 0.85).abs() < 1e-6
+            kind == &"founded by" && vp == &"opinion" && (*vpc - 0.85).abs() < 1e-6
         });
         assert!(found.is_some(), "typed opinion edge missing: {edges:?}");
     }

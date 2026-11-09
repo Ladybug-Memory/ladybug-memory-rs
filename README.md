@@ -191,6 +191,12 @@ copied) and `skills/lb-memory/SKILL.md`.
   relatedness under a generic query and the phrase is mined from the
   between-span surface, e.g. `founded`, `runs`). Typed pairs become directed
   `RelatesTo` edges; pairs with no typed edge keep the old `coOccurs` fallback.
+  Mined phrases canonicalize against a 3,063-label Wikidata property table
+  (`edge_meta.duckdb` export, baked in as `wikidata_properties.csv` — exact
+  label, initialism (`ceo`), token-cover, then glue-tolerant prefix match;
+  pairs whose span swallows another real-world mention are dropped),
+  so `great ceo of`, `ceo since` and `ceo` all land as one `chief executive
+  officer` edge. Misses stay raw (open schema preserved).
   Every edge carries `valid_from`/`valid_to` (known-true interval, `""` =
   unknown), `tense`, `viewpoint` (`fact` vs `opinion`, zero-shot classified
   per fact) and confidence. Recall boosts hits whose adjacent typed

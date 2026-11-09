@@ -1,0 +1,3064 @@
+id,label
+6,head of government
+10,video
+16,transport network
+17,country
+19,place of birth
+20,place of death
+21,sex or gender
+22,father
+25,mother
+26,spouse
+27,country of citizenship
+30,continent
+31,instance of
+35,head of state
+36,capital
+37,official language
+38,currency
+39,position held
+40,child
+47,shares border with
+50,author
+51,audio
+53,family
+54,member of sports team
+57,director
+58,screenwriter
+59,constellation
+61,discoverer or inventor
+65,site of astronomical discovery
+66,ancestral home
+69,educated at
+78,top-level Internet domain
+81,connecting line
+84,architect
+85,anthem
+86,composer
+87,librettist
+88,commissioned by
+91,sexual orientation
+92,main regulatory text
+97,noble title
+98,editor
+101,field of work
+102,member of political party
+103,native language
+106,occupation
+108,employer
+110,illustrator
+111,measured physical quantity
+112,founded by
+113,airline hub
+114,airline alliance
+115,home venue
+117,chemical structure
+118,league or competition
+119,place of burial
+121,item operated
+122,basic form of government
+123,publisher
+126,maintained by
+127,owned by
+128,regulates (molecular biology)
+129,physically interacts with
+131,located in the administrative territorial entity
+135,movement
+136,genre
+137,operator
+138,named after
+140,religion or worldview
+141,IUCN conservation status
+143,imported from Wikimedia project
+144,based on
+149,architectural style
+150,contains the administrative territorial entity
+155,follows
+156,followed by
+157,killed by
+159,headquarters location
+161,cast member
+162,producer
+163,flag
+166,award received
+167,structure replaced by
+169,chief executive officer
+170,creator
+171,parent taxon
+172,ethnic group
+175,performer
+176,manufacturer
+177,crosses
+178,developer
+179,part of the series
+180,depicts
+183,endemic to
+184,doctoral advisor
+185,doctoral student
+186,made from material
+189,location of discovery
+190,twinned administrative body
+193,main building contractor
+194,legislative body
+195,collection
+196,minor planet group
+197,adjacent station
+199,organizational divisions
+200,inflows
+201,outflows
+205,basin country
+206,located in or next to body of water
+208,executive body
+209,highest judicial authority
+210,party chief representative
+213,ISNI
+215,spectral class
+223,galaxy morphological type
+225,taxon name
+229,IATA airline designator
+230,ICAO airline designator
+233,canonical SMILES
+234,InChI
+235,InChIKey
+237,coat of arms
+241,military branch
+248,stated in
+263,official residence
+264,record label
+272,production company
+274,chemical formula
+275,copyright license
+276,location
+277,programmed in
+279,subclass of
+282,writing system
+286,head coach
+287,designed by
+289,vessel class
+291,place of publication
+301,category's main topic
+304,page(s)
+305,IETF language tag
+306,operating system
+344,director of photography
+355,child organization/unit
+358,discography
+360,is a list of
+361,part of
+364,original language of film or TV show
+366,has use
+368,Sandbox-CommonsMediaFile
+369,Sandbox-Item
+370,Sandbox-String
+371,presenter
+373,Commons category
+375,space launch vehicle
+376,located on astronomical body
+377,SCN
+397,parent astronomical body
+398,child astronomical body
+399,companion of
+400,platform
+403,mouth of the watercourse
+404,game mode
+405,taxon author
+406,soundtrack release
+407,language of work or name
+408,software engine
+411,canonization status
+412,voice type
+413,position played on team / speciality
+414,stock exchange
+415,radio format
+417,patron saint
+418,"has seal, badge, or sigil"
+421,located in time zone
+423,shooting handedness
+425,field of this occupation
+426,aircraft registration
+427,taxonomic type
+428,botanist author abbreviation
+432,callsign of airline
+433,issue
+437,distribution format
+439,German municipality key
+440,German district key
+443,pronunciation audio
+444,review score
+447,review score by
+449,original broadcaster
+450,astronaut mission
+451,unmarried partner
+452,industry
+453,character role
+457,foundational text
+459,determination method or standard
+460,said to be the same as
+461,opposite of
+462,color
+463,member of
+465,sRGB color hex triplet
+466,occupant
+467,legislated by
+469,lake on watercourse
+470,Eight Banner register
+478,volume
+479,input device
+483,recorded at studio or venue
+485,archives at
+487,Unicode character
+488,chairperson
+490,provisional designation
+491,orbit diagram
+495,country of origin
+500,exclave of
+501,enclave within
+503,ISO standard
+504,shipping port
+505,general manager
+509,cause of death
+511,honorific prefix
+512,academic degree
+514,interleaves with
+515,phase of matter
+516,powered by
+517,interaction
+518,applies to part
+520,armament
+521,scheduled service destination
+522,type of orbit
+523,temporal range start
+524,temporal range end
+527,has part(s)
+529,runway
+530,diplomatic relation
+531,diplomatic mission sent
+532,port of registry
+533,target
+534,streak color
+537,twinning
+538,mineral fracture
+541,office contested
+542,officially opened by
+543,oath made by
+545,torch lit by
+546,docking port
+547,commemorates
+548,version type
+550,chivalric order
+551,residence
+552,handedness
+555,doubles record
+556,crystal system
+557,DiseasesDB
+559,terminus
+560,direction
+561,NATO reporting name
+562,central bank/issuer
+563,ICD-O
+564,singles record
+565,crystal habit
+566,has basionym
+567,underlies
+568,overlies
+569,date of birth
+570,date of death
+571,inception
+574,year of publication of scientific name for taxon
+575,time of discovery or invention
+576,"dissolved, abolished or demolished date"
+577,publication date
+578,Sandbox-TimeValue
+580,start time
+582,end time
+585,point in time
+587,MMSI
+588,coolant
+589,point group
+598,commander of (DEPRECATED)
+606,first flight
+607,participated in conflict
+608,exhibition history
+609,terminus location
+610,highest point
+611,religious order
+612,mother house
+613,OS grid reference
+618,source of energy
+619,UTC date of spacecraft launch
+620,UTC date of spacecraft landing
+621,time of object orbit decay
+622,spacecraft docking/undocking date
+624,guidance system
+625,coordinate location
+626,Sandbox-GeoCoordinateValue
+629,edition or translation of
+631,structural engineer
+634,team captain
+636,route of administration
+641,sport
+642,of (DEPRECATED)
+644,genomic start
+645,genomic end
+647,drafted by
+652,UNII
+653,PubMed Health
+654,direction relative to location
+655,translator
+656,RefSeq
+658,tracklist
+659,genomic assembly
+662,PubChem CID
+664,organizer
+669,located on street
+674,characters
+676,lyricist
+678,incertae sedis
+680,molecular function
+681,cell component
+682,biological process
+684,ortholog
+688,encodes
+689,afflicts
+690,space group
+693,cleavage
+694,replaced synonym (for nom. nov.)
+697,ex taxon author
+702,encoded by
+703,found in taxon
+706,located in/on physical feature
+707,spacecraft bus
+708,diocese
+710,participant
+712,Nickel-Strunz 9th edition (updated 2009)
+713,"Nickel-Strunz '10th ed', review of (9th ed/ 2009 update)"
+714,Dana 8th edition
+720,asteroid spectral type
+725,voice actor
+726,candidate
+729,service entry
+730,service retirement
+734,family name
+735,given name
+736,cover art by
+737,influenced by
+739,ammunition
+740,location of formation
+741,playing hand
+742,pseudonym
+744,asteroid family
+746,date of disappearance
+747,has edition or translation
+748,appointed by
+749,parent organization
+750,distributed by
+751,introduced feature
+756,removed feature
+765,surface played on
+767,contributor to the creative work or subject
+768,electoral district
+769,significant drug interaction
+770,cause of destruction
+773,ISO 3166-3
+774,FIPS 55-3 (locations in the US)
+779,Church of Sweden Pastoratskod
+780,symptoms and signs
+782,LAU
+783,hymenium type
+784,mushroom cap shape
+785,hymenium attachment
+786,stipe character
+787,spore print color
+788,mushroom ecological type
+789,edibility
+790,approved by
+791,ISIL
+792,chapter
+793,significant event
+795,located on linear feature
+797,authority
+798,military designation
+800,notable work
+802,student
+803,professorship
+805,statement is subject of
+807,separated from
+811,academic minor
+812,academic major
+813,retrieved
+814,IUCN protected areas category
+815,ITIS TSN
+816,decays to
+817,decay mode
+819,ADS bibcode
+822,mascot
+823,speaker
+825,dedicated to
+826,tonality
+828,has cause
+831,parent club
+832,public holiday
+833,interchange station
+834,train depot
+835,author citation (zoology)
+837,day in year for periodic occurrence
+840,narrative location
+841,feast day
+847,United States Navy aircraft designation
+849,Japanese military aircraft designation
+852,ESRB rating
+853,CERO rating
+859,sponsor
+862,Operational Requirement of the UK Air Ministry
+868,foods traditionally associated
+870,instrumentation
+872,printed by
+873,phase point
+874,UN class
+876,UN packaging group
+877,NFPA Special
+878,avionics
+880,CPU
+881,type of variable star
+882,FIPS 6-4
+885,origin of the watercourse
+887,based on heuristic
+897,United States Army and Air Force aircraft designation
+898,IPA transcription
+901,FIPS 10-4 (countries and regions)
+908,PEGI rating
+910,topic's main category
+912,has facility
+913,notation
+914,USK rating
+915,filming location
+916,GSRR rating
+917,GRAU index
+921,main subject
+922,magnetic ordering
+923,medical examination
+924,possible treatment
+925,presynaptic connection
+926,postsynaptic connection
+927,anatomical location
+928,activating neurotransmitter
+929,color space
+930,type of electrification
+931,place served by transport hub
+935,Commons gallery
+937,work location
+941,inspired by
+942,theme music
+943,programmer
+945,allegiance
+946,ISIN
+948,page banner
+952,ISCO-88 occupation class
+958,"section, verse, paragraph, or clause"
+964,Austrian municipality key
+965,burial plot reference
+967,guest of honor
+968,email address
+970,neurological function
+971,category combines topics
+972,catalog
+974,tributary
+989,spoken text audio
+990,audio recording of the subject's spoken voice
+991,successful candidate
+993,NFPA Health
+994,NFPA Fire
+995,NFPA Instability
+999,ARICNS
+1000,record held
+1001,applies to jurisdiction
+1002,engine configuration
+1011,excluding
+1012,including
+1013,criterion used
+1016,asteroid taxonomy
+1018,language regulatory body
+1025,SUDOC editions
+1026,academic thesis
+1027,conferred by
+1028,donated by
+1029,crew member
+1030,light characteristic
+1031,legal citation of this text
+1032,digital rights management system
+1033,GHS signal word
+1034,main food source
+1035,honorific suffix
+1037,director / manager
+1038,relative
+1039,kinship to subject
+1040,film editor
+1041,socket supported
+1044,SWB editions
+1046,discovery method
+1049,worshipped by
+1050,medical condition
+1052,CPP-2010
+1053,ResearcherID
+1056,product or material produced
+1057,chromosome
+1060,disease transmission process
+1064,track gauge
+1066,student of
+1068,instruction set
+1071,location of creation
+1074,fictional or mythical analog of
+1075,rector
+1078,valvetrain configuration
+1079,launch contractor
+1080,from narrative universe
+1081,Human Development Index
+1082,population
+1083,maximum capacity
+1084,EUL editions
+1087,Elo rating
+1088,Mohs' hardness
+1090,redshift
+1092,total produced
+1093,gross tonnage
+1096,orbital eccentricity
+1097,g-factor
+1101,floors above ground
+1102,flattening
+1106,Sandbox-Quantity
+1107,proportion
+1108,electronegativity
+1109,refractive index
+1110,attendance
+1111,votes received
+1114,quantity
+1117,pKa
+1121,oxidation state
+1125,Gini coefficient
+1127,isospin z-component
+1128,employees
+1129,national team appearances
+1135,nomenclatural status
+1136,solved by
+1137,fossil found in this unit
+1139,floors below ground
+1142,political ideology
+1143,BN (Argentine) editions
+1145,Lagrangian point
+1151,topic's main Wikimedia portal
+1154,Scopus EID
+1158,location of landing
+1159,CODEN
+1160,ISO 4 abbreviation
+1161,Z39.5 abbreviation
+1162,Bluebook abbreviation
+1163,media type
+1164,group cardinality
+1165,home world
+1170,transmitted signal type
+1171,approximation algorithm
+1172,Geokod
+1174,visitors per year
+1181,numeric value
+1182,LIBRIS editions
+1183,Gewässerkennzahl
+1191,date of first performance
+1192,connecting service
+1193,prevalence
+1194,received signal type
+1196,manner of death
+1198,unemployment rate
+1199,mode of inheritance
+1200,category for the water basin
+1201,space tug
+1202,carries scientific instrument
+1204,Wikimedia portal's main topic
+1208,ISMN
+1209,CN
+1210,supercharger
+1211,fuel system
+1213,NLC authorities
+1215,apparent magnitude
+1221,compressor type
+1227,astronomical filter
+1240,Danish Bibliometric Research Indicator level
+1243,ISRC
+1245,OmegaWiki Defined Meaning
+1247,compression ratio
+1249,time of earliest written record
+1250,Danish Bibliometric Research Indicator (BFI) SNO/CNO
+1256,Iconclass notation
+1257,depicts Iconclass notation
+1259,coordinates of the point of view
+1260,Swedish Open Cultural Heritage URI
+1264,valid in period
+1268,represents
+1269,facet of
+1279,inflation rate
+1281,WOEID
+1282,OpenStreetMap tag or key
+1283,filmography
+1290,godparent
+1295,emissivity
+1299,depicted by
+1300,bibcode
+1302,primary destinations
+1303,instrument
+1304,central bank
+1308,position holder
+1310,statement disputed by
+1312,has facet polytope
+1313,office held by head of government
+1317,floruit
+1318,proved by
+1319,earliest date
+1321,municipal affiliation of a Swiss national
+1322,dual to
+1326,latest date
+1327,partner in business or sport
+1332,coordinates of northernmost point
+1333,coordinates of southernmost point
+1334,coordinates of easternmost point
+1335,coordinates of westernmost point
+1336,territory claimed by
+1338,EPSG CRS
+1340,eye color
+1343,described by source
+1344,participant in
+1346,winner
+1349,ploidy
+1352,ranking
+1353,original spelling
+1354,shown with features
+1358,points for
+1363,points/goal scored by
+1365,replaces
+1366,replaced by
+1372,binding of software library
+1373,daily patronage
+1376,capital of
+1382,partially coincident with
+1383,contains settlement
+1387,political alignment
+1388,German regional key
+1389,product certification
+1390,match time of event
+1393,proxy
+1398,structure replaces
+1399,convicted of
+1403,original combination
+1406,script directionality
+1408,licensed to broadcast to
+1411,nominated for
+1412,"languages spoken, written or signed"
+1414,GUI toolkit or framework
+1416,affiliation
+1418,orbits completed
+1419,shape
+1420,taxon synonym
+1423,template has topic
+1424,topic's main template
+1425,ecoregion (WWF)
+1427,start point
+1429,has pet
+1431,executive producer
+1433,published in
+1434,takes place in fictional universe
+1435,heritage designation
+1436,collection or exhibition size
+1437,plea
+1441,present in work
+1443,score method
+1444,destination point
+1445,fictional universe described in
+1448,official name
+1449,nickname
+1450,Sandbox-Monolingual text
+1451,motto text
+1454,legal form
+1455,list of works
+1456,list of monuments
+1457,absolute magnitude
+1458,color index
+1462,standards body
+1464,category for people born here
+1465,category for people who died here
+1470,maximum glide ratio
+1471,reporting mark
+1472,Commons Creator page
+1476,title
+1477,birth name
+1478,has immediate cause
+1479,has contributing factor
+1480,sourcing circumstances
+1482,Stack Exchange tag
+1531,hybrid of
+1532,country for sport
+1533,family name identical to this given name
+1534,end cause
+1535,used by
+1536,immediate cause of
+1537,contributing factor of
+1539,female population
+1540,male population
+1542,has effect
+1543,monogram
+1545,series ordinal
+1546,motto
+1547,depends on software
+1549,demonym
+1552,has characteristic
+1557,manifestation of
+1558,tempo marking
+1559,name in native language
+1560,given name version for other gender
+1568,definition domain
+1571,codomain
+1574,exemplar of
+1575,RISS catalog
+1576,lifestyle
+1582,natural product of taxon
+1589,lowest point
+1591,defendant
+1592,prosecutor
+1593,defender
+1594,judge
+1595,charge
+1596,penalty
+1598,consecrator
+1604,biosafety level
+1605,has natural reservoir
+1606,natural reservoir of
+1612,Commons Institution page
+1619,date of official opening
+1620,plaintiff
+1622,driving side
+1625,has melody
+1628,equivalent property
+1629,Wikidata item of this property
+1632,Hermann-Mauguin notation
+1635,religious name
+1636,date of baptism
+1637,undercarriage
+1638,working title
+1639,pendant of
+1640,curator
+1641,port
+1642,acquisition transaction
+1643,departure transaction
+1647,subproperty of
+1652,referee
+1654,wing configuration
+1656,unveiled by
+1657,MPA film rating
+1659,related property
+1660,has index case
+1672,this taxon is source of
+1673,general formula
+1677,index case of
+1678,has vertex figure
+1680,subtitle
+1683,quotation
+1684,inscription
+1685,Pokémon index
+1686,for work
+1687,Wikidata property
+1689,central government debt as a percent of GDP
+1690,ICD-10-PCS
+1691,operations and procedures key (OPS)
+1692,ICD-9-CM
+1693,Terminologia Embryologica
+1694,Terminologia Histologica
+1696,inverse property
+1697,total valid votes
+1703,is pollinated by
+1704,is pollinator of
+1705,native label
+1706,together with
+1709,equivalent class
+1716,brand
+1721,Hanyu Pinyin transliteration
+1725,beats per minute
+1734,oath of office date
+1738,Merck Index monograph
+1740,category for films shot at this location
+1750,name day
+1752,scale
+1753,list related to category
+1754,category related to list
+1760,Aviation Safety Network Wikibase Occurrence
+1774,workshop of
+1775,follower of
+1776,circle of
+1777,manner of
+1778,forgery after
+1779,possible creator
+1780,school of
+1782,courtesy name
+1785,temple name
+1786,posthumous name
+1787,art name
+1789,chief operating officer
+1791,category for people buried here
+1792,category of associated people
+1793,format as a regular expression
+1800,Wikimedia database name
+1809,choreographer
+1810,subject named as
+1811,list of episodes
+1813,short name
+1814,name in kana
+1817,addressee
+1827,ISWC
+1830,owner of
+1831,electorate
+1840,investigated by
+1843,taxon common name
+1845,anti-virus alias
+1851,input set
+1852,Perry Index
+1853,blood type
+1855,Wikidata property example
+1867,eligible voters
+1868,ballots cast
+1875,represented by
+1876,vessel
+1877,after a work by
+1880,measurement scale
+1881,list of characters
+1884,hair color
+1885,cathedral
+1887,vice-county
+1889,different from
+1891,signatory
+1897,highest note
+1898,lowest note
+1903,volcanic explosivity index
+1906,office held by head of state
+1909,side effect
+1910,decreased expression in
+1911,increased expression in
+1912,gene deletion association with
+1913,gene duplication association with
+1914,gene insertion association with
+1915,gene inversion association with
+1916,gene substitution association with
+1917,posttranslational modification association with
+1918,altered regulation leads to
+1921,formatter URI for RDF resource
+1922,first line
+1923,participating team
+1924,vaccine for
+1932,object named as
+1937,UN/LOCODE
+1942,McCune–Reischauer romanization
+1945,street key
+1950,second family name in Spanish name
+1951,investor
+1956,takeoff and landing capability
+1963,properties for this type
+1973,RSL editions
+1981,FSK film rating
+1990,species kept
+1993,TeX string
+1995,health specialty
+1999,UNESCO language status
+2001,Revised Romanization
+2002,X (Twitter) username
+2003,Instagram username
+2009,Exif model
+2010,Exif make
+2012,cuisine
+2013,Facebook username
+2017,isomeric SMILES
+2031,work period (start)
+2032,work period (end)
+2033,category for pictures taken with this camera
+2037,GitHub username
+2043,length
+2044,elevation above sea level
+2045,orbital inclination
+2046,area
+2047,duration
+2048,height
+2049,width
+2050,wingspan
+2051,M sin i
+2052,speed
+2053,watershed area
+2054,density
+2055,electrical conductivity
+2056,specific heat capacity
+2058,depositary
+2060,luminosity
+2061,aspect ratio (W:H)
+2066,molar fusion enthalpy
+2067,mass
+2068,thermal conductivity
+2069,magnetic moment
+2073,vehicle range
+2075,speed of sound
+2076,temperature
+2077,under pressure
+2079,fabrication method
+2093,author name string
+2094,competition class
+2095,co-driver
+2096,media legend
+2097,term length of position
+2098,substitute/deputy/replacement of office/officeholder
+2101,melting point
+2102,boiling point
+2103,size of team at start
+2105,size of team at finish
+2106,RXNO Ontology
+2107,decomposition point
+2109,nominal power output
+2112,wing area
+2113,sublimation temperature
+2114,half-life
+2116,molar enthalpy of vaporization
+2117,combustion enthalpy
+2118,kinematic viscosity
+2119,vapor pressure
+2120,radius
+2121,prize money
+2124,member count
+2125,revised Hepburn romanization
+2126,Georgian national system of romanization
+2127,International Nuclear Event Scale
+2128,flash point
+2129,immediately dangerous to life or health
+2130,capital cost
+2131,nominal GDP
+2132,nominal GDP per capita
+2133,total debt
+2134,total reserves
+2135,total exports
+2136,total imports
+2137,total equity
+2138,total liabilities
+2139,total revenue
+2140,foreign direct investment net outflow
+2141,foreign direct investment net inflow
+2142,box office
+2143,genome size
+2144,frequency
+2145,explosive energy equivalent
+2146,orbital period
+2147,rotation period
+2148,distance from river mouth
+2149,clock frequency
+2150,FSB speed
+2151,focal length
+2152,antiparticle
+2154,binding energy
+2155,solid solution series with
+2156,pseudo crystal habit
+2159,computes solution to
+2160,mass excess
+2175,medical condition treated
+2176,drug or therapy used for treatment
+2177,solubility
+2178,solvent
+2183,ISO 9:1995
+2184,history of topic
+2196,count of students
+2197,production rate
+2198,average gradient
+2199,autoignition temperature
+2200,electric charge
+2201,electric dipole moment
+2202,lower flammable limit
+2203,upper flammable limit
+2204,minimum explosive concentration
+2208,average shot length
+2209,SourceForge project
+2210,relative to
+2211,position angle
+2212,angular distance
+2213,longitude of ascending node
+2214,parallax
+2216,radial velocity
+2217,cruise speed
+2218,net worth
+2219,real GDP growth rate
+2220,household wealth
+2221,flux
+2222,gyromagnetic ratio
+2223,decay width
+2225,discharge
+2226,market capitalization
+2227,metallicity
+2228,maximum thrust
+2229,thermal design power
+2230,torque
+2231,explosive velocity
+2232,cash
+2233,semi-major axis of an orbit
+2234,volume as quantity
+2235,external superproperty
+2236,external subproperty
+2239,first aid measures
+2240,median lethal dose (LD50)
+2243,apoapsis
+2244,periapsis
+2248,argument of periapsis
+2250,life expectancy
+2253,DfE URN
+2254,maximum operating altitude
+2257,event interval
+2260,ionization energy
+2261,beam
+2262,draft
+2271,Wikidata property example for properties
+2272,Hederich encyclopedia article
+2275,World Health Organisation  international non-proprietary name
+2279,ambitus
+2282,Groeningemuseum work PID
+2283,uses
+2284,price
+2285,periapsis date (DEPRECATED)
+2286,arterial supply
+2288,lymphatic drainage
+2289,venous drainage
+2291,charted in
+2292,consumption rate
+2293,genetic association
+2294,balance of trade
+2295,net profit
+2296,money supply
+2297,employment by economic sector
+2299,PPP GDP per capita
+2300,minimal lethal dose
+2302,property constraint
+2303,exception to constraint
+2304,group by
+2305,item of property constraint
+2306,property
+2307,Wikimedia Commons namespace
+2308,class
+2309,relation
+2310,minimum date (property constraint)
+2311,maximum date (property constraint)
+2312,maximum value
+2313,minimum value
+2315,comment (DEPRECATED)
+2316,constraint status
+2318,debut participant
+2319,elector
+2320,aftershocks
+2324,quantity buried
+2325,mean anomaly
+2329,antagonist muscle
+2341,indigenous to
+2348,time period
+2352,applies to taxon
+2353,statistical unit used
+2354,has list
+2358,praenomen
+2359,nomen gentilicium
+2360,intended public
+2361,online service
+2362,time to altitude
+2363,NMHH film rating
+2365,cognomen
+2366,agnomen
+2368,Sandbox-Property
+2370,conversion to SI unit
+2371,FAO risk status
+2374,natural abundance
+2375,has superpartner
+2376,superpartner of
+2377,MediaWiki hooks used
+2378,issued by
+2379,deprecated in version
+2384,statement describes
+2386,diameter
+2388,position held by head of the organization
+2389,organization directed by the office or position
+2392,teaching method
+2393,NCBI locus tag
+2402,total expenditure
+2403,total assets
+2404,time-weighted average exposure limit
+2405,ceiling exposure limit
+2406,maximum peak exposure limit
+2407,short-term exposure limit
+2408,set in period
+2411,Artsy gene
+2414,substrate of
+2415,personal best
+2416,sports discipline competed in
+2421,Prosopographia Attica
+2429,expected completeness
+2430,takeoff roll
+2433,gender of a scientific name of a genus
+2436,voltage
+2438,narrator
+2440,transliteration or transcription
+2441,literal translation
+2442,conversion to standard unit
+2443,stage reached
+2444,homoglyph
+2445,metasubclass of
+2451,MAME ROM name
+2453,nominee
+2460,Persons of Ancient Athens
+2462,member of the deme
+2490,page at OSTIS Belarus Wiki
+2499,league level above
+2500,league level below
+2501,results
+2505,carries
+2507,corrigendum / erratum
+2511,MSK Gent work PID
+2512,has spin-off
+2515,costume designer
+2517,category for recipients of this award
+2521,female form of label
+2522,competition won
+2527,earthquake magnitude on the moment magnitude scale
+2528,earthquake magnitude on the Richter magnitude scale
+2532,lowest atmospheric pressure
+2534,defining formula
+2535,Sandbox-Mathematical expression
+2537,Free Software Directory entry
+2540,Aarne–Thompson–Uther Tale Type Index
+2541,operating area
+2542,acceptable daily intake
+2545,bowling style
+2546,sidekick of
+2547,perimeter
+2548,strand orientation
+2550,recording or performance of
+2551,used metre
+2552,quantitative metrical pattern
+2553,in work
+2554,production designer
+2555,fee
+2556,bore
+2557,stroke
+2559,Wikidata usage instructions
+2560,GPU
+2561,name
+2562,married name
+2563,superhuman feature or ability
+2565,global warming potential
+2567,amended by
+2568,repealed by
+2571,uncertainty corresponds to
+2572,hashtag
+2575,measures
+2577,admissible rule in
+2578,is the study of
+2579,studied by
+2583,distance from Earth
+2587,has phoneme
+2591,grammatical option indicates
+2595,maximum gradient
+2596,culture
+2597,Gram staining
+2599,block size
+2610,thickness
+2614,World Heritage criteria
+2629,BBFC rating
+2630,cost of damage
+2632,place of detention
+2633,geography of topic
+2634,model
+2637,RARS rating
+2645,mean lifetime
+2647,source of material
+2650,interested in
+2652,partnership with
+2658,Scoville grade
+2659,topographic isolation
+2660,topographic prominence
+2661,target interest rate
+2662,consumption rate per capita
+2663,common equity tier 1 capital ratio (CETI)
+2664,units sold
+2665,alcohol by volume
+2666,Datahub page
+2667,corresponding template
+2668,stability of property value
+2669,discontinued date
+2670,has part(s) of the class
+2673,next crossing upstream
+2674,next crossing downstream
+2675,reply to
+2679,author of foreword
+2680,author of afterword
+2681,is recto of
+2682,is verso of
+2684,Kijkwijzer rating
+2687,JPNO
+2695,type locality (geology)
+2700,protocol
+2702,dataset distribution
+2710,minimal lethal concentration
+2712,median lethal concentration (LC50)
+2713,sectional view
+2715,elected in
+2717,no-observed-adverse-effect level
+2718,lowest-observed-adverse-effect level
+2719,Hungarian-style transcription
+2737,union of
+2738,disjoint union of
+2739,typeface/font used
+2743,this zoological name is coordinate with
+2744,PASE name
+2746,production statistics
+2747,Filmiroda rating
+2754,production date
+2756,EIRIN film rating
+2758,CNC film rating (France)
+2768,BNE periodical OID
+2769,budget
+2770,source of income
+2781,race time
+2784,modified Mercalli intensity scale
+2786,aerodrome reference point
+2787,longest span
+2789,connects with
+2790,net tonnage
+2791,power consumed
+2793,clearance
+2795,directions
+2797,sound power level
+2803,Wikidata time precision
+2806,vibration
+2807,molar volume
+2808,wavelength
+2813,house publication
+2817,appears in the heritage monument list
+2820,cardinality of this set
+2821,by-product
+2822,by-product of
+2825,via
+2827,flower color
+2828,corporate officer
+2831,totem
+2832,Joint Electronics Type Designation Automated System designation
+2834,individual tax rate
+2835,lowest income threshold
+2836,highest income threshold
+2838,professional name
+2839,gait
+2841,age of onset
+2842,place of marriage
+2844,incidence
+2846,disabled accessibility
+2848,Wi-Fi access
+2849,produced by
+2851,payment types accepted
+2853,electrical plug type
+2854,disease burden
+2855,VAT rate
+2860,cites work
+2868,subject has role
+2869,record or record progression
+2872,visitor center
+2873,time in space
+2875,property usage tracking category
+2876,type of unit for this property
+2881,promoted
+2882,relegated
+2884,mains voltage
+2888,exact match
+2892,UMLS CUI
+2893,Skype username
+2894,day of week
+2895,maximum sustained winds
+2896,publication interval
+2898,Swedish county letter
+2899,minimum age
+2907,UTC timezone offset
+2910,icon
+2911,time gap
+2912,distinctive jersey
+2913,date depicted
+2916,syntax clarification
+2918,post office box
+2922,month of the year
+2923,focal height
+2925,domain of saint or deity
+2927,water as percent of area
+2928,storage capacity
+2929,lighthouse range
+2935,connector
+2936,language used
+2937,parliamentary term
+2951,Cultural heritage database in Austria ObjektID
+2955,point of penalty
+2957,throughput
+2959,permanent duplicated item
+2960,archive date
+2962,title of chess person
+2964,right to vote
+2974,habitat
+2975,host
+2976,patronym or matronym for this name
+2978,wheel arrangement
+2979,maritime identification digits
+2984,Snapchat username
+2986,aircraft registration prefix
+2988,GOST 7.67 cyrillic
+2989,has grammatical case
+2992,software quality assurance
+2993,partition coefficient water/octanol
+2997,age of majority
+2998,age of candidacy
+2999,age of consent
+3000,marriageable age
+3001,retirement age
+3005,valid in place
+3013,surface tension
+3014,laws applied
+3015,backup or reserve team or crew
+3018,located in protected area
+3019,railway signalling system
+3020,residence time of water
+3022,flag bearer
+3025,open days
+3026,closed on
+3027,open period from
+3028,open period to
+3030,sheet music
+3032,adjacent building
+3033,package management system
+3036,precipitation height
+3037,spatial reference system
+3039,wheelbase
+3041,luminous intensity
+3057,Charity Commission no.
+3063,gestation period
+3068,WIPO ST.3
+3070,dynamic viscosity
+3071,standard molar entropy
+3075,official religion
+3078,standard enthalpy of formation
+3080,game artist
+3081,damaged
+3082,destroyed
+3085,qualifies for event
+3086,speed limit
+3087,fiscal/tax revenue
+3091,mount
+3092,film crew member
+3093,recovered by
+3094,develops from
+3095,practiced by
+3103,has tense
+3113,does not have part
+3120,TOID
+3132,last line
+3137,parent peak
+3148,repeals
+3149,molecule conformation
+3150,birthday
+3157,event distance
+3158,enclosure
+3161,has grammatical mood
+3173,offers view on
+3174,art director
+3176,uses property
+3179,territory overlaps
+3185,VK username
+3189,innervated by
+3190,innervates
+3193,GS1 Company Prefix
+3195,league points system
+3205,patient of
+3212,ISAN
+3216,ClassInd rating
+3233,PhilPeople profile
+3235,PhilPapers topic
+3238,trunk prefix
+3240,NBN System Key
+3251,minimum viable temperature
+3252,maximum viable temperature
+3253,optimum viable temperature
+3254,property proposal discussion
+3259,intangible cultural heritage status
+3260,points awarded
+3261,anatomical branch of
+3262,has anatomical branch
+3263,base
+3264,radix
+3270,compulsory education (minimum age)
+3271,compulsory education (maximum age)
+3274,content deliverer
+3275,storyboard artist
+3279,statistical leader
+3290,biography at the Landtag of Mecklenburg-Vorpommern
+3294,encoding
+3300,musical conductor
+3301,broadcast by
+3306,ICAA rating
+3310,muscle action
+3320,board member
+3321,male form of label
+3323,opponent during disputation
+3331,HGVS nomenclature
+3335,associated hazard
+3337,generation time
+3342,significant person
+3345,RxNorm CUI
+3347,PermID
+3349,designed to carry
+3354,positive therapeutic predictor for
+3355,negative therapeutic predictor for
+3356,positive diagnostic predictor for
+3357,negative diagnostic predictor for
+3358,positive prognostic predictor for
+3359,negative prognostic predictor for
+3362,operating income
+3364,stereoisomer of
+3373,sibling
+3374,endianness
+3383,film poster
+3387,minimum frequency of audible sound
+3395,heart rate
+3402,CNC film rating (Romania)
+3403,coextensive with
+3415,start period
+3416,end period
+3428,INCAA film rating
+3432,parent cell line
+3433,biological variant of
+3437,carries passengers or cargo
+3438,vehicle normally used
+3439,angular resolution
+3442,Debian stable package
+3447,mirrors data from
+3448,stepparent
+3450,sports season of league or competition
+3451,nighttime view
+3452,inferred from
+3454,Arch Linux package
+3457,case fatality rate
+3460,colonel-in-chief
+3461,designated as terrorist by
+3463,Fedora package
+3464,medicine marketing authorization
+3465,maximum frequency of audible sound
+3467,Inventario Sculture - Polo Museale Fiorentino
+3473,Ubuntu package
+3480,base Mémoire reference
+3485,bite force quotient
+3486,normal respiratory rate
+3487,maximal incubation period in humans
+3488,minimal incubation period in humans
+3489,pregnancy category
+3490,muscle origin
+3491,muscle insertion
+3493,legal status (medicine)
+3499,Gentoo package
+3501,Christian liturgical rite
+3502,Ameblo username
+3512,means of locomotion
+3518,Smithsonian trinomial
+3529,median income
+3530,par
+3559,maximum size or capacity
+3575,data size
+3578,autologous cell line
+3592,saros cycle of eclipse
+3597,F-Droid package
+3599,archival creator authority record at the Archives nationales
+3602,candidacy in election
+3610,fare zone
+3618,base salary
+3629,age of subject at event
+3643,significant environmental impact
+3648,NatureServe conservation status
+3650,JMK film rating
+3679,stock market index
+3680,statement supported by
+3701,incarnation of
+3709,category for value different from Wikidata
+3712,has goal
+3713,category for value not in Wikidata
+3719,regulated by
+3721,public key fingerprint
+3732,PhilPapers record
+3734,category for value same as Wikidata
+3737,maximum wavelength of sensitivity
+3738,minimum wavelength of sensitivity
+3739,inflorescence
+3741,seed dispersal
+3752,worst-case time complexity
+3753,best-case time complexity
+3754,average time complexity
+3755,worst-case space complexity
+3756,best-case space complexity
+3757,average space complexity
+3761,IPv4 routing prefix
+3764,pole position
+3771,activator of
+3772,agonist of
+3773,antagonist of
+3774,blocker of
+3775,disrupting agent for
+3776,inhibitor of
+3777,antisense inhibitor of
+3778,positive allosteric modulator of
+3779,negative allosteric modulator of
+3780,active ingredient in
+3781,has active ingredient
+3789,Telegram username
+3792,rate of fire
+3793,IPv6 routing prefix
+3803,original film format
+3815,volcano observatory
+3816,film script
+3818,KMRB film rating
+3823,Ethnologue language status
+3825,United States Statutes at Large citation
+3828,wears
+3831,object of statement has role
+3833,diaspora
+3834,RTC film rating
+3836,Pinterest username
+3837,United States Public Law
+3840,slope rating
+3842,located in the present-day administrative territorial entity
+3858,route diagram template
+3864,suicide rate
+3865,type of reference
+3871,tributary orientation
+3872,patronage
+3876,category for alumni of educational institution
+3878,Soundex
+3879,Cologne phonetics
+3880,Caverphone
+3891,observing time available
+3893,public domain date
+3896,geoshape
+3899,Medium username
+3902,had as last meal
+3903,column
+3909,last words
+3912,newspaper format
+3919,contributed to creative work
+3921,Wikidata SPARQL query equivalent
+3922,light sector
+3931,copyright holder
+3934,face value
+3938,named by
+3943,Tumblr username
+3950,narrower external class
+3966,programming paradigm
+3967,final event
+3969,signed form
+3972,PASE Domesday place
+3975,general secretary
+3982,TA98 Latin term
+3983,sports league level
+3984,subreddit
+3985,supports programming language
+3989,members have occupation
+3994,racon signal
+3999,date of official closure
+4000,has fruit type
+4002,WFD Ecological status
+4006,overrules
+4010,GDP (PPP)
+4013,Giphy username
+4016,SlideShare username
+4017,Ustream username
+4018,The Arabidopsis Information Resource Accession
+4020,ISQ dimension
+4032,reviewed by
+4033,Mastodon address
+4036,field of view
+4043,emulates
+4044,therapeutic area
+4045,Sandbox-Tabular data
+4047,Sandbox-Geographic shape
+4082,captured with
+4091,Irish Grid Reference
+4092,checksum
+4099,metrically compatible typeface
+4100,parliamentary group
+4101,thesis submitted to
+4103,assets under management
+4105,EGF rating
+4109,URN-NBN
+4111,danskefilm TV Christmas calendar
+4131,annual energy output
+4132,linguistic typology
+4135,maximum age
+4137,muzzle velocity
+4140,energy storage capacity
+4147,conjugate acid
+4149,conjugate base
+4150,weather history
+4151,game mechanics
+4153,offset
+4155,separator
+4162,AUR package
+4163,magnification
+4174,Wikimedia username
+4176,effective firing range
+4179,tabular population
+4183,angle from vertical
+4184,slope
+4187,Wylie transliteration
+4188,Tibetan pinyin
+4189,THL Simplified Phonetic Transcription
+4195,category for employees of the organization
+4196,cytogenetic location
+4202,WFD Chemical status
+4214,longest observed lifespan
+4218,shelf life
+4220,order of battle
+4224,category contains
+4225,IPA Braille
+4229,ICD-10-CM
+4239,vocalized name
+4240,regular expression syntax
+4241,refine date
+4242,maximal rate of climb
+4250,defined daily dose
+4265,Reddit username
+4268,half maximal inhibitory concentration (IC50)
+4269,half maximal effective concentration (EC50)
+4271,rating
+4272,DPLA subject term
+4290,official app
+4291,panoramic view
+4292,possessed by spirit
+4295,readership
+4296,stellar rotational velocity
+4312,camera setup
+4316,kinship equivalent in SPARQL at Wikidata
+4329,category populated by
+4330,contains
+4337,digitised page from Lloyd's Register of Ships from 1930 to 1945
+4341,synodic period
+4345,director of archaeological fieldwork
+4350,salinity
+4353,nominated by
+4379,youth wing
+4387,update method
+4390,mapping relation type
+4403,caliber
+4411,Quora username
+4424,mandates
+4425,mtDNA haplogroup
+4426,Y-DNA Haplogroup
+4428,implementation of
+4431,Google Doodle
+4435,snap package
+4437,FPB rating
+4441,hydraulic head
+4442,mean age
+4443,card network
+4444,reward
+4445,grace period
+4446,reward program
+4447,minimum spend bonus
+4448,cash back
+4500,family relationship degree
+4501,albedo
+4509,National Monuments of Namibia Site Reference
+4510,describes a project that uses
+4511,vertical depth
+4519,payload mass
+4543,has listed ingredient
+4545,sexually homologous with
+4552,mountain range
+4566,awarded for period
+4575,HTML entity
+4584,first appearance
+4586,type foundry
+4589,Dreadnought Project page
+4595,post town
+4599,monomer of
+4600,polymer of
+4602,date of burial or cremation
+4608,scenographer
+4614,drainage basin
+4622,trophy awarded
+4624,squadron embarked
+4626,identity of object in context
+4628,ICTV virus genome composition
+4633,name of the character role
+4634,premiere type
+4646,representation of
+4647,location of first performance
+4649,identity of subject in context
+4653,partition table type
+4661,reservoir created
+4669,tabular software version
+4675,appears in the form of
+4680,constraint scope
+4688,geomorphological unit
+4733,produced sound
+4743,animal breed
+4745,is proceedings from
+4770,hydrated form of
+4774,biological phase
+4777,has boundary
+4788,storage device
+4791,commanded by
+4792,created by dam
+4793,identifiers.org prefix
+4794,season starts
+4805,make-up artist
+4809,sets environment variable
+4810,reads environment variable
+4812,Statistical Service of Cyprus Geocode
+4815,Technical Element Score
+4825,deductions (in figure skating)
+4826,Program Component Score
+4837,has command line option
+4841,total fertility rate
+4843,development of anatomical structure
+4844,research intervention
+4850,permitted food additive
+4851,maximum food additive use level
+4863,recognition sequence
+4864,cutting site of restriction enzyme
+4873,isoschizomer
+4875,neoschizomer
+4878,symbolizes
+4882,segmental innervation
+4884,court
+4895,time index
+4896,3D model
+4900,broader concept
+4905,KMSKA artwork PID
+4908,season
+4912,century breaks
+4913,dialect of
+4914,produces cohesive end
+4915,isocaudomer
+4934,calculated from
+4951,INCI name
+4954,may prevent disease
+4964,SPLASH
+4967,prerequisite
+4968,relevant qualification
+4969,derivative work
+4970,alternative name
+4973,Wikitribune category
+4988,test method
+4998,key press
+5004,in opposition to
+5008,on focus list of Wikimedia project
+5009,complies with
+5017,last update
+5021,assessment
+5022,test score
+5023,activity policy in this place
+5024,choral conductor
+5025,gens
+5026,lighting designer
+5028,sound designer
+5030,talk show guest
+5040,GHS hazard pictogram
+5041,GHS hazard statement
+5042,GHS precautionary statement
+5049,Harvard designation
+5051,towards
+5052,supervisory board member
+5053,fastest lap
+5054,member of cabinet
+5056,patronym or matronym
+5059,modified version of
+5065,wind speed
+5066,operating temperature
+5067,non-operating temperature
+5069,service life
+5070,French standard size for oil paintings
+5071,boiler pressure
+5072,presented in
+5095,fault
+5096,member of the crew of
+5102,nature of statement
+5109,has grammatical gender
+5110,has grammatical person
+5123,Swedish Literature Bank edition
+5125,Wikimedia outline
+5126,assistant director
+5131,possible medical findings
+5132,suggests the existence of
+5133,has evaluation
+5134,evaluation of
+5135,greater than
+5136,less than
+5137,item for this sense
+5138,season of club or team
+5139,Möllendorff transliteration
+5140,coordinates of geographic center
+5141,coastline
+5143,amateur radio callsign
+5148,e-MEC entry
+5150,IGAC rating
+5152,KAVI rating
+5166,established from medical condition
+5167,vehicles per thousand people
+5168,applies to name of subject
+5180,CIVICUS Monitor country entry
+5185,grammatical gender
+5186,conjugation class
+5187,word stem
+5188,Sandbox-Lexeme
+5189,Sandbox-Form
+5191,derived from lexeme
+5192,Wikidata property example for lexemes
+5193,Wikidata property example for forms
+5194,officialized by
+5196,output device
+5201,IMDA rating
+5202,adapted by
+5204,date of commercialization
+5205,stroke count
+5206,has conjugation class
+5230,chromosome count
+5236,prime factor
+5237,pronunciation variety
+5238,combines lexemes
+5244,sinogram reading pattern
+5248,medical evacuation to
+5249,sports competition competed at
+5252,winter view
+5256,OpenCorporates corporate grouping
+5276,Slavistic Phonetic Alphabet transcription
+5277,grade of kanji
+5278,surname for other gender
+5279,hyphenation
+5280,radical
+5281,residual stroke count
+5285,Firmenbuchnummer
+5286,Portable Game Notation
+5304,type locality (biology)
+5307,display technology
+5314,property scope
+5317,jockey
+5323,attested in
+5328,revival or touring version of
+5348,angular diameter
+5349,laps completed
+5350,Alexander polynomial
+5351,Conway polynomial
+5352,Jones polynomial
+5353,school district
+5386,JMA Seismic Intensity Scale
+5389,permanent resident of
+5401,auxiliary verb
+5402,homograph lexeme
+5412,romanization of Belarusian (2007 system)
+5422,has pattern
+5425,Han character in this lexeme
+5426,tone or pitch accent class
+5427,position of accent nucleus
+5428,position of devoiced vowel
+5429,IPTC NewsCode
+5438,signum
+5439,research measurement
+5444,model year
+5446,reference value
+5447,lower limit
+5448,upper limit
+5460,grants
+5475,CJKV variant character
+5479,ultimate tensile strength
+5480,tensile modulus of elasticity
+5481,position of nasal sonant
+5483,hardness
+5514,accredited by
+5518,four-corner method
+5519,Cangjie input
+5520,toughness
+5522,Unicode block
+5523,fanqie
+5524,horizontal depth
+5526,valency
+5529,yield strength
+5531,Central Index Key
+5536,Swedish place name register SOFI
+5537,Hangul pronunciation
+5548,object form
+5552,CNRS Talent page
+5555,schematic
+5560,passive voice
+5564,registration district
+5565,CRAN project
+5568,PyPI project
+5572,expressed in
+5575,coefficient of friction
+5587,Libris-URI
+5588,invasive to
+5589,microstructure
+5591,normalized Unicode character
+5593,Poisson's ratio
+5594,moisture absorption
+5596,relative humidity
+5606,class of station
+5607,located in the religious territorial entity
+5608,fatigue limit
+5623,type of water supply
+5625,Vietnamese reading
+5630,prisoner count
+5638,IEEE standard
+5642,risk factor
+5647,Baidu ScholarID
+5658,railway traffic side
+5668,bulk modulus
+5669,compressive strength
+5670,glass transition temperature
+5672,linear thermal expansion coefficient
+5673,shear modulus
+5674,thermal diffusivity
+5675,relative permittivity
+5676,relative permeability
+5677,flexural strength
+5678,dissipation factor
+5679,electrical resistivity
+5681,flexural modulus
+5682,heat deflection temperature
+5685,tear resistance
+5686,ITU-R Recommendation
+5688,ITU-T Recommendation
+5692,dummy value
+5699,Transport Canada LID
+5706,shear strength
+5707,samples from work
+5708,force
+5709,abrasion resistance
+5713,requires grammatical feature
+5748,Basisklassifikation
+5753,ideographic description sequence
+5755,EU RCN
+5769,editor-in-chief
+5797,Twitch username
+5800,narrative role
+5802,stage crew member
+5804,has program committee member
+5805,OSI Model layer location
+5811,elongation at break
+5814,IANA service name
+5816,state of conservation
+5817,state of use
+5822,admission rate
+5824,retracted by
+5825,ISO 15919 transliteration
+5826,majority opinion by
+5828,seed
+5830,subject lexeme form
+5831,usage example
+5832,political coalition
+5838,Nintendo GameID (GameCube/Wii)
+5841,Status in the Red List of Threatened Species in the Czech Republic
+5852,item inherits statement from
+5869,model item
+5872,smells of
+5873,place of devotion
+5880,video designer
+5881,projection designer
+5886,mode of derivation
+5893,work hardening strain
+5894,tuition fee
+5895,foreign transaction fee
+5896,trading fee
+5897,account charge / subscription fee
+5898,borrowing rate
+5899,interest rate
+5900,JMA Magnitude
+5911,paradigm class
+5913,has paradigm class
+5920,root
+5923,creates lexeme type
+5929,limiting oxygen index
+5940,plot expanded in
+5947,Vicat softening point
+5949,Unicode range
+5961,depicted part
+5962,sail emblem
+5965,LUBW Protected Area No
+5967,reference vocabulary
+5970,Medierådet rating
+5972,translation
+5973,synonym
+5974,antonym
+5975,troponym of
+5976,false friend
+5977,Wikidata property example for senses
+5978,classifier
+5979,Sandbox-Sense
+5980,object sense
+5991,carbon footprint
+5992,attenuation coefficient
+5993,compressive modulus of elasticity
+5995,kit supplier
+5996,category for films in this language
+5997,object stated in reference as
+5998,distributary
+6000,water footprint
+6001,applies to people
+6014,flexural strain at break
+6022,"expression, gesture or body pose"
+6069,INEP IGC continuous score
+6072,subject sense
+6073,permeability
+6075,embodied energy
+6076,biobased content weight percentage
+6081,RIA Novosti reference
+6084,location of sense usage
+6086,dramaturge
+6087,coach of sports team
+6088,beer bitterness
+6089,beer color
+6095,INEP IGC discrete grade
+6099,clinical trial phase
+6104,maintained by WikiProject
+6106,uses capitalization for
+6112,category for members of a team
+6116,chord progression
+6118,season ends
+6149,running mate
+6153,research site
+6166,quotes work
+6184,reference has role
+6185,tautomer of
+6186,category for eponymous categories
+6191,language style
+6193,ratified by
+6195,funding scheme
+6204,CNPJ
+6208,award rationale
+6210,LIGA profile
+6212,heat treating
+6216,copyright status
+6219,TASS reference
+6224,level of description
+6229,Discord Store game SKU
+6237,real estate developer
+6241,collection creator
+6243,digital representation of
+6249,narrative age
+6251,catchphrase
+6254,subject lexeme
+6257,right ascension
+6258,declination
+6259,epoch
+6260,galactic longitude
+6261,galactic latitude
+6271,demonym of
+6272,specific rotation
+6274,concentration
+6275,copyright representative
+6291,advertises
+6333,title of broader work
+6338,colorist
+6339,reports periodicity
+6343,urban population
+6344,rural population
+6346,statutory purpose
+6354,closest approach
+6364,official color
+6365,member category
+6370,REDIZO
+6375,street address
+6379,has works in the collection
+6385,Krugosvet article
+6424,affiliation string
+6427,trading name
+6432,Alexander–Briggs notation
+6437,day of regular release
+6438,Euler characteristic
+6439,has lyrics
+6440,maintenance method
+6449,Douban site name
+6450,Douban username
+6451,Zhihu username
+6452,CBFC rating
+6455,Bilibili UID
+6477,does not have characteristic
+6484,Antarctica NZ Digital Asset Manager
+6497,drag coefficient
+6498,illiterate population
+6499,literate population
+6507,taxon author citation
+6509,total goals in career
+6510,stall speed
+6524,expression of
+6530,has role in modeling
+6531,observed in
+6532,has phenotype
+6533,type of front suspension
+6534,type of rear suspension
+6540,multi-channel network
+6543,total shots in career
+6544,total points in career
+6545,total assists in career
+6546,penalty minutes in career
+6547,career plus-minus rating
+6553,personal pronoun
+6563,key performance indicator
+6568,inscription mentions
+6569,taxon especially protected in area
+6571,collective noun for animals
+6586,Cook Partisan Voting Index
+6587,league system
+6589,endowment
+6590,highest break
+6591,maximum temperature record
+6592,OpenStreetMap zoom level
+6593,hyperonym
+6604,Sandbox-Musical Notation
+6606,study or design for
+6607,constraint clarification
+6608,General Material Designation
+6609,transitive over
+6639,capacity factor
+6648,position in Forsyth-Edwards Notation
+6650,Martindale-Hubbell profile
+6655,stroke order
+6670,musical quotation or excerpt
+6684,first attested from
+6685,Wikidata property example for media
+6686,musical motif
+6707,approach angle
+6708,departure angle
+6710,linear reference
+6711,data transfer speed
+6718,music video
+6719,specified by sense
+6720,interwiki prefix at Wikimedia
+6731,Commons quality assessment
+6757,exposure time
+6758,supported sports team
+6765,Guix Variable Name
+6789,ISO speed
+6794,minimum wage
+6798,UPA transcription
+6803,taxon found at location
+6819,calligrapher
+6824,replacement property
+6826,feed-in tariff
+6833,title in HTML
+6835,title in LaTeX
+6837,Keybase username
+6840,student organization of
+6855,emergency services
+6856,average speed
+6857,JIS standard
+6872,has written for
+6875,motif represents
+6876,solar irradiance
+6879,effective temperature
+6883,LilyPond notation
+6884,target muscle
+6885,historical region
+6886,writing language
+6887,match interval
+6889,microarchitecture
+6897,literacy rate
+6902,era name
+6916,Heritage Gazetteer of Cyprus
+6931,Repology project name
+6938,seconded by
+6939,moved by
+6942,animator
+6948,video system
+6949,announcement date
+6954,online access status
+6962,narrative motif
+6977,review of
+6978,Scandinavian middle family name
+6997,magazine in BitArkivo.org
+7008,unabbreviated text
+7009,extracted from
+7010,imprimatur granted by
+7015,surface gravity
+7018,lexeme sense
+7040,NosDéputés.fr identifiant
+7045,chassis
+7047,enemy
+7069,World Athletics competition category
+7073,extension on WikiApiary
+7074,skin on WikiApiary
+7075,mod of
+7078,typing discipline
+7079,shrinkage
+7080,specific absorption rate
+7081,quotation or excerpt
+7083,surface roughness
+7084,related category
+7085,TikTok username
+7086,start grade
+7087,inverse label item
+7089,AFCD PFKID
+7094,WaterNSW Rivers and Streams Site No.
+7095,end grade
+7103,start of covered period
+7104,end of covered period
+7108,location of the point of view
+7120,Douyin username
+7122,opinion joined by
+7124,date of the first one
+7125,date of the latest one
+7137,acknowledged
+7141,musical bars shown
+7144,NOTAM (FAA)
+7150,epigraph
+7152,copyright exemption
+7153,significant place
+7160,manner of inhumane treatment
+7161,Kinsky–Halm Catalogue
+7162,cases consolidated
+7163,typically sells
+7165,noun class
+7167,does not have effect
+7169,substitute director/manager
+7170,register of real estate NKP
+7171,Hacker News username
+7174,school class
+7209,ordeal by
+7219,periphrastic definition
+7220,lexeme sense for periphrastic definition
+7221,link for periphrastic definition
+7228,access restriction status
+7235,in defining formula
+7243,pronunciation
+7252,degree of difficulty
+7253,color produced
+7256,computer performance
+7261,use restriction status
+7289,CPUID
+7295,Gregorian calendar start date
+7297,cumulative elevation gain
+7309,climbing route
+7320,Labelcode
+7328,amount cataloged
+7336,GCF Reference
+7338,regnal ordinal
+7367,content descriptor
+7374,educational stage
+7376,worn by
+7377,infix
+7378,item disputed by
+7379,fineness
+7383,name in hiero markup
+7391,graph radius
+7396,Beachsafe Beach Key
+7406,style of karate
+7416,folio(s)
+7419,gender educated
+7421,line(s)
+7422,minimum temperature record
+7427,FreeBSD port
+7442,glacier status
+7462,graph diameter
+7468,MOHW HospID
+7469,orientation
+7470,URN formatter
+7479,key col
+7481,"variety of lexeme, form or sense"
+7486,grammatical aspect
+7497,Wolfram Language entity type
+7500,comorbidity
+7501,audio system
+7508,election called by
+7514,landscape architect
+7528,statement is regarded as spoiler for
+7535,scope and content
+7559,Ahotsak lexeme
+7561,category for the interior of the item
+7573,IFCO rating
+7574,Swedish Royal Theater Archive
+7576,Broadcast Radio Bearer URI
+7581,IAST transliteration
+7582,Wildlife Protection Act 1972 (India) schedule
+7584,age estimated by a dating method
+7588,effective date
+7589,date of promulgation
+7590,eBay username
+7598,ascending scale
+7599,descending scale
+7600,primary note
+7601,secondary note
+7603,CITES Appendix
+7604,supervised by
+7605,Hunterian transliteration
+7607,WikiTree category or space
+7643,covered period
+7704,Europeana entity
+7706,nominalized form
+7719,generalization of
+7725,litter size
+7727,legislative committee
+7737,DeviantArt username
+7749,Nomenclature for Museum Cataloging
+7763,copyright status as a creator
+7767,serving temperature
+7770,egg incubation period
+7779,military unit
+7781,exonerated of
+7782,category for ship name
+7787,heading
+7788,openSUSE package
+7789,Ten-Bruggencatenummer
+7793,filename in archive
+7855,attested as
+7861,category for files created with program
+7862,period of lactation
+7863,aperture
+7867,category for maps or plans
+7888,merged into
+7903,gained territory from
+7904,gave up territory to
+7927,Open Food Facts label
+7936,business model
+7937,form of creative work
+7938,associated electoral district
+7949,Czech War Graves Register
+7957,Directory of Maîtres d'art
+7959,historic county
+7964,corresponding HTML autocomplete attribute
+7967,OpenBSD port
+7971,food energy
+7976,stargate-wiki.de article
+7984,depicted format
+7985,Kanopy
+8000,electron configuration
+8001,endorsed by
+8002,Social Security Death Index entry
+8004,ordered by
+8005,research subject recruitment status
+8006,footedness
+8017,generational suffix
+8026,LiverTox likelihood score
+8030,size designation
+8031,perpetrator
+8032,victim(s)
+8045,organized response related to outbreak
+8046,Latvian transcription
+8047,country of registry
+8054,ARK formatter
+8091,Archival Resource Key
+8092,EcuRed article
+8093,donations
+8097,network bands
+8107,bus
+8111,recommended unit of measurement
+8112,CSS color keyword
+8115,eligible recipient
+8119,HASC
+8127,tournament format
+8131,dialect of computer language
+8138,located in the statistical territorial entity
+8176,itch.io developer profile
+8189,P8189
+8193,hardiness of plant
+8194,hardiness zone
+8195,ex-libris
+8196,voting system
+8203,supported metadata
+8204,tabular case data
+8205,Mozilla Developer Network article
+8206,Gazette of India notification
+8208,tilt
+8225,is metaclass for
+8228,lighting
+8241,type of age limit
+8242,Niden INE
+8243,500 Queer Scientists profile
+8247,nominal share capital
+8257,Wikilengua article
+8258,field of training
+8262,npm package
+8263,curriculum topics
+8264,attribution text
+8265,based on tabular data
+8272,BaGLAMa GID
+8274,living people protection class
+8275,position in biological sequence
+8283,ISCO-08 occupation class
+8289,parish church(es)
+8306,has grouping
+8307,has sorting
+8308,has column
+8324,funder
+8327,intended subject of deprecated statement
+8328,Democracy Index
+8329,principal investigator
+8331,strike tone
+8338,applies to name of object
+8339,entry receptor
+8340,estimated value
+8345,media franchise
+8346,Nomor Pokok Wajib Pajak
+8363,study type
+8367,Legacy.com PersonID/GBID
+8371,"references work, tradition or theory"
+8378,Dowker-Thistlethwaite notation
+8379,qualifier for this property
+8388,Swedish Parliament person GUID
+8394,gloss quote
+8395,use with property value
+8396,use with qualifier
+8397,prompt when missing
+8398,offset from vertical
+8402,open data portal
+8403,theorized by
+8411,set in environment
+8413,academic appointment
+8416,Dowker-Thistlethwaite name
+8419,Archive of Our Own tag
+8423,version control system
+8428,interactive elements
+8431,course
+8443,Homebrew formula name
+8453,public transport stop
+8459,descriptive solubility
+8460,applies if regular expression matches
+8464,content partnership category
+8465,van der Waals constant a
+8466,van der Waals constant b
+8471,pertainym of
+8476,BTI Governance Index
+8477,BTI Status Index
+8480,Ofsted inspection rating
+8497,height of center of mass
+8500,Vietnamese middle name
+8503,heraldic attitude
+8506,power plant operating licence (Turkey)
+8512,size comparison diagram
+8517,view
+8530,alternative form
+8533,SMARTS notation
+8535,tala
+8536,raga
+8546,recording location
+8554,earliest end date
+8555,latest start date
+8556,extinction date
+8558,Butcher tableau
+8560,PARADISEC Catalog
+8570,front and back matter
+8571,external auditor
+8592,aerial view
+8594,ride height
+8596,category for the exterior of the item
+8597,axle track
+8604,OnlyFans username
+8615,Oakeshott typology
+8620,construction point
+8621,turning radius
+8622,hill size
+8625,bibliography
+8626,opening time
+8627,closing time
+8628,engine displacement
+8646,expansion of
+8652,Netflix maturity rating
+8670,character designer
+8684,x-offset
+8685,y-offset
+8687,social media followers
+8693,fandom
+8701,has census
+8702,parallel street
+8703,entry in abbreviations table
+8706,ritual object
+8713,Stadtwiki Dresden article
+8727,Minecraft UUID
+8738,permits
+8739,prohibits
+8744,economy of topic
+8745,check-in time
+8746,check-out time
+8751,die axis
+8752,Kramerius of Moravian Library UUID
+8753,annual average daily traffic
+8757,maximum current
+8763,birth rate
+8764,port calls
+8770,format as language specific regular expression
+8778,Docker Hub repository
+8786,dedicated heritage entity
+8789,defining mutations
+8791,digitised by
+8794,BBFC reference
+8798,for color scheme
+8810,parent
+8822,epithet
+8824,attraction to
+8827,GitLab.com username
+8832,PAN member
+8839,hairstyle / hairlength
+8843,poverty incidence
+8852,facial hair
+8864,identity element
+8865,mathematical inverse
+8866,has operator
+8872,has marker
+8874,Hong Kong film rating
+8875,indexed in bibliographic review
+8881,ITRANS
+8882,complementary property
+8886,CIP data sheet
+8887,water area
+8889,MTRCB rating
+8890,power consumption index
+8891,heating energy consumption index
+8894,BG EIK
+8898,road name formatter
+8901,ELSPA rating
+8904,Parler username (archived)
+8911,Sonneveld-index
+8919,Gab username
+8927,kunya
+8933,category for the view from the item
+8938,artistic director
+8939,Google Play developer slug
+8942,word lookup
+8952,inappropriate property for this type
+8956,compatible with
+8963,National Library at Kolkata romanization
+8976,Lichess username
+8986,graph girth
+8989,category for the view of the item
+8990,World Rowing rower UUID
+8991,ALA-LC romanization
+9021,Bharati Braille
+9030,solution to
+9037,BHCL UUID
+9045,Alpine Linux package
+9047,archaeological site of
+9052,date postally canceled
+9059,subdivision of this unit
+9065,Parabola package
+9071,character type
+9072,derived from organism type
+9073,applicable 'stated in' value
+9086,BAMID film rating
+9100,GitHub topic
+9101,Discord username
+9126,Commons media contributed by
+9128,Debian source package
+9139,first family name in Portuguese name
+9140,time played
+9149,coordinates of depicted place
+9161,thesis committee member
+9188,bases on balls
+9190,runs batted in
+9191,letterer
+9192,sensors
+9215,set during recurring event
+9217,stolen bases
+9220,doubles hit
+9223,Provenio UUID
+9225,triples hit
+9234,supplement to
+9237,reissue of
+9238,staking percentage
+9239,affiliated worker organisation
+9241,demographics of topic
+9259,assessment outcome
+9260,music transcriber
+9271,Kickstarter username
+9274,subsidy
+9275,inverse agonist of
+9279,Egapro gender equality index
+9295,transitivity
+9302,script style
+9310,pHash checksum
+9311,Jyutping transliteration
+9313,Yale romanization
+9317,Institute of Language in Education Scheme
+9323,Cantonese Transliteration Scheme transliteration
+9344,has graphical element
+9353,does not have cause
+9373,Ukrainian national romanization
+9376,law digest
+9382,Unicode character name
+9396,trade union membership rate
+9411,USCG MIC
+9419,personal library at
+9440,pH value
+9448,introduced on
+9453,ALA-LC romanization for Ukrainian
+9488,field of usage
+9493,artist files at
+9496,degrees day
+9513,APA Dictionary of Psychology entry
+9521,Biology Online Biology Dictionary entry
+9533,audio transcription
+9547,counterpart position
+9548,earned run average
+9549,official podcast
+9566,diel cycle
+9567,intended background color
+9570,scope note
+9574,Anime Filler List episode slug
+9583,sense on DHLE
+9597,type of lens
+9600,oral history at
+9602,OSDN project
+9604,DiVA authority-person
+9611,district heating grid
+9630,OpenCorporates register jurisdiction
+9652,personality trait of fictional character
+9660,not found in
+9665,EGID
+9667,date of resignation
+9680,consequence of text
+9681,voted on by
+9687,author given names
+9688,author last names
+9696,Buzer.de law identification
+9700,delta of
+9714,taxon range
+9729,replacement value
+9731,announced at
+9745,translation of
+9763,syntactic dependency head relationship
+9764,syntactic dependency head position
+9767,edition/version
+9790,Smithsonian trinomial format regex
+9793,setlist
+9794,UCLA Space Inventory LocID
+9800,CDDA designationTypeCode
+9803,UEFA stadium category
+9810,remix of
+9812,Likee username
+9813,container
+9831,release of
+9863,Gujarati Vishwakosh entry
+9866,GRAC rating
+9883,created for
+9887,Candomblé nation
+9888,NZTCS conservation status
+9897,App Store age rating
+9899,music created for
+9901,issuing agent of work
+9905,relevant date for copyright
+9926,populates category
+9929,madhhab
+9945,dissertation program
+9946,date of probate
+9969,catalogue raisonné
+9970,predicate for
+9971,has semantic argument
+9972,illustrative content
+9974,ITU radio emission designation
+9976,copyright registration
+9977,isotopically modified form of
+9989,stylized name
+9997,Bowers acronym
+9998,excitation energy
+10038,Conway polyhedron notation
+10067,train melody
+10079,FAOLEX No
+10091,death rate
+10107,specific impulse by weight
+10129,protective marking
+10135,recording date
+10176,type host
+10177,CSS property
+10228,facilitates flow of
+10229,next level in hierarchy
+10232,Volgograd Oblast address register
+10241,individual of taxon
+10254,associated cadastral district
+10263,admission yield rate
+10271,Engineer's Line Reference
+10273,Corruption Perceptions Index
+10280,category for honorary citizens of entity
+10290,hotel rating
+10300,DPI for original size
+10307,CYT/CCS
+10308,director of publication
+10316,dpi for A4 printing
+10322,time in the pouch
+10339,semantic gender
+10358,original catalog description
+10374,computational complexity
+10408,created during
+10449,trained by
+10476,identifies
+10527,documentation files at
+10551,supports qualifier
+10568,maintains linking to
+10581,Cameroun COG
+10587,IFPI GTIN
+10588,academic calendar type
+10594,taxonomic treatment
+10601,co-applicant
+10602,applicant
+10604,type of a register in Germany
+10606,notable role
+10607,athletics program
+10611,has certification
+10612,choreography for
+10614,has surface
+10619,Kramerius of Regional Library in Pardubice UUID
+10622,per capita income
+10624,official observer status in organisation
+10627,web interface software
+10629,suggested data fields
+10630,medically indicated in case of
+10640,pole positions
+10642,place of disappearance
+10645,reports to
+10648,podium finishes
+10654,rack system
+10655,oeconym
+10656,WikiApiary farm
+10661,exhibited creator
+10663,applies to work
+10664,featured track(s)
+10672,raw material processed
+10673,debut date
+10680,franchisor
+10681,government debt-to-GDP ratio
+10685,ionic radius
+10694,Royal Thai General System of Transcription
+10695,introduced in
+10714,WikiProject importance scale rating
+10718,CXSMILES
+10721,Identifiant Les Recteurs d'Académie en France
+10726,class of non-item property value
+10729,finisher
+10731,support of a function
+10732,probability mass function
+10733,probability generating function
+10734,Fisher information
+10735,characteristic function
+10736,cumulative distribution function
+10737,quantile function
+10738,mean of a probability distribution
+10739,median of a probability distribution
+10740,mode of a probability distribution
+10741,dance style
+10743,variance of a probability distribution
+10744,skewness
+10745,excess kurtosis
+10746,information entropy
+10747,moment-generating function
+10751,declination component of proper motion
+10752,right ascension component of proper motion
+10754,distributed from
+10768,Similarweb ranking
+10777,candidate position
+10786,date of incorporation
+10788,in operation on service
+10806,orchestrator
+10808,preceding halt on service
+10809,following halt on service
+10818,last entry
+10822,homophone form
+10823,fastest laps
+10824,Ethereum token address
+10836,inker
+10837,penciller
+10858,Truth Social username
+10859,Material UI icon
+10884,Gitee username
+10888,contains the statistical territorial entity
+10892,Bioconductor project
+10893,recordist
+10894,spoken by
+10906,foliage type
+10927,counts instances of
+10946,contraindicated in case of
+10960,harvested organism(s)
+10969,power series expansion
+10999,web page title extract pattern
+11033,LiLa Linking Latin URI
+11034,Gauss notation
+11053,grammatical person
+11081,won sets
+11105,annotator
+11106,alphabetical index
+11108,recorded participant
+11130,Merriam-Webster online dictionary entry
+11140,embargoed until
+11146,collection items at
+11184,Bank of information on the historical and cultural heritage of the Republic of Belarus
+11196,Baidu Tieba name
+11197,build system
+11200,tiratge
+11205,pinout
+11206,npm scope or username
+11220,fruit color
+11228,Dictionary.com entry
+11230,Collins Online English Dictionary entry
+11231,has biological vector
+11246,hackage package
+11253,Packagist package
+11260,list item
+11263,The Britannica Dictionary entry
+11265,alt text
+11269,changeset
+11292,man page
+11293,Amazon.com browse node
+11317,negates property
+11356,grading system
+11372,CocoaPods pod
+11375,CSD Refcode
+11385,camera lens
+11412,minimum focusing distance
+11413,sampling rate
+11422,Cambridge Dictionary entry (British English)
+11423,Cambridge Dictionary entry (American English)
+11424,service options
+11429,NIP
+11460,Plex media key
+11463,travel advisory category
+11464,model lexeme
+11482,Longman Dictionary of Contemporary English Online entry
+11484,does not use
+11485,Infopédia entry
+11491,member of Roman tribe
+11527,applies to use with property
+11530,addons.mozilla.org user
+11531,Packagist username
+11532,Hackage username
+11533,RubyGems username
+11534,PyPI username
+11547,Happy Planet Index score
+11550,RISM siglum
+11558,digital equivalent of
+11571,ESID
+11577,said to be the same as lexeme
+11590,stamp perforation
+11593,Inequality-adjusted Human Development Index
+11603,transcribed by
+11611,Norwegian media rating
+11626,Vintage Fashion Guild label
+11627,Lighthouse Directory page
+11633,colocated with
+11637,Wattpad username
+11645,Electronic library encyclopedia.com.ua
+11698,student retention rate
+11738,"handled, mitigated, or managed by"
+11747,holds diplomatic passport of
+11785,iconically alludes to
+11796,time of periapsis
+11799,alternate universe counterpart
+11801,visited by
+11811,beforehand owned by
+11812,afterward owned by
+11813,solubility product constant
+11814,funded by grant
+11821,quality is the result of process
+11832,satellite view
+11849,first performance by
+11851,record of
+11858,National Science Foundation award
+11862,orchestration
+11867,Law Insider Legal Dictionary entry
+11868,type of document(s) held
+11889,autosuggest value
+11892,Threads username
+11899,median household income
+11901,NCI Dictionary of Cancer Terms entry
+11902,NCI Dictionary of Genetics Terms entry
+11916,shortcode
+11922,verdict
+11924,IMDb keyword
+11950,appears before phonological feature
+11951,appears after phonological feature
+11952,appears before lexeme form
+11953,appears after lexeme form
+11962,Rumble channel
+11964,tournament type
+12002,has heir or beneficiary
+12004,towing capacity
+12006,learning outcome
+12011,tribe
+12020,state of transmission
+12027,describes actor of
+12028,describes undergoer of
+12030,Mageia package
+12038,REDnote profile
+12041,type of musical notation
+12044,chronological designation
+12045,Codeberg username
+12050,demo of
+12077,SlackBuilds package
+12089,self-identified name
+12090,non-self-identified name
+12094,DfE group UID
+12095,fonds
+12099,parent form of an active substance
+12105,Red List of South African Plants conservation status
+12110,Parpulov group
+12132,stated in source according to
+12147,Danacode (short)
+12148,Danacode (long)
+12151,BNE periodical SID
+12163,IDVT
+12164,BISAC Subject Heading
+12168,Torino scale
+12208,counterexample
+12221,battery life
+12275,plate(s)
+12322,underlying structure(s)
+12323,working memory type
+12324,production manager
+12327,Stage username
+12328,simulates
+12330,Philippine middle name
+12346,based on media
+12355,Merkur author page
+12363,clerked for
+12369,Bantumen Powerlist 100
+12409,Bluesky DID
+12410,semantic derivation of
+12413,date of application
+12417,Environmental Performance Index
+12432,age of onset of sexual maturity
+12436,phonetic value
+12441,Anglo-Norman Dictionary entry
+12443,has cabinet
+12445,China Animal Scientific Database taxon UUID
+12446,ISCED field
+12452,appeals to
+12456,phonographic copyright
+12457,invariant under
+12468,PyPI trove classifier
+12469,graduation rate
+12470,normal graduation time
+12471,multiplier of normal graduation time
+12475,top scorer
+12476,filial church
+12484,television judge
+12491,SMIRKS
+12503,thesaurus's main topic
+12504,thesaurus combines topics
+12505,topic's main thesaurus
+12506,latest end date
+12516,rug style
+12526,performing organization
+12527,form decomposition
+12548,media modality
+12549,height of letters
+12571,derived from base unit
+12593,SNS Info Saúde
+12616,leaf morphology
+12617,creative director
+12621,beneficial owner
+12622,PeerTube channel address
+12629,Zillow zpid
+12642,EBITDA
+12643,date popularized
+12651,authorised capital
+12654,IAFD film UUID
+12657,follows spelling pattern
+12663,risk group
+12680,deterioration
+12686,category for births in this time period
+12687,category for deaths in this time period
+12692,representation type
+12693,source of transfer
+12694,destination of transfer
+12700,Cbonds company profile
+12705,The Law Dictionary entry
+12712,population by native language
+12714,tartan
+12754,Bildindex der Kunst und Architektur PID
+12763,taxon synonym of
+12764,replaced synonym of
+12765,protonym of
+12766,basionym of
+12776,IAFD actor UUID
+12795,showrunner
+12809,vehicle keeper marking (VKM)
+12830,music mood
+12853,ozone depletion potential
+12854,Plex person key
+12861,EntitySchema for this class
+12873,ArchWiki article
+12876,writing technique
+12878,last appearance
+12886,Sandbox-EntitySchema
+12895,indexer
+12912,object of occurrence
+12913,class of object(s) of occurrence
+12919,public funding
+12933,"relates to sustainable development goal, target or indicator"
+12949,denomination
+12956,exponent of base unit
+12967,VIRIN
+12969,game designer
+12981,handwriting example
+12992,objects of occurrence have role
+12993,role of agent(s) of action
+12994,class of agent(s) of action
+12995,agent of action
+13032,Kramerius of Czech Digital Library UUID
+13035,Western Australian Biographical Index
+13044,characteristic of
+13045,has kanji reading
+13046,publication type of scholarly work
+13047,leased to
+13048,magazine capacity
+13146,picture of this person doing their job
+13150,ISCC
+13162,reference illustration
+13171,bequest income
+13176,taxon known by this common name
+13177,homonymous taxon
+13187,role named in credits as
+13188,meeting of
+13210,organisation tax status
+13215,DOSBoxWiki article
+13221,SBOID
+13236,Danbooru tag
+13238,entry height
+13243,Game Jolt username
+13260,romantic orientation
+13269,directs readers to
+13282,land acknowledgement
+13296,study or design for this work
+13308,software used for creation
+13318,mode of reproduction
+13326,Toki Pona headnoun
+13337,domain name
+13338,thesis submitted for degree
+13353,provides data for property
+13359,items classified
+13360,presented works
+13380,OAI formatter
+13381,AI-generation prompt
+13390,booru tag
+13391,data analysis method
+13413,beam energy
+13415,Taiwanese Taigi Romanization System
+13459,research project that contributed to this data set
+13464,terminal speaker
+13466,National Gallery (London) PID
+13473,Trafikplatssignatur
+13478,nomenclatural type of
+13484,Know Your Meme slug
+13488,TermTerm UUID
+13493,Repertorium kleine politieke partijen 1918-1967 (Party)
+13497,interior designer
+13504,kigo of
+13518,likes of fictional character
+13519,dislikes of fictional character
+13525,RAM capacity
+13545,PyPI organization name
+13549,species protection status
+13551,Nation Ranking (primary)
+13552,Nation Ranking (secondary)
+13564,third-gender population
+13571,context window
+13572,ComputerLanguage.com definition
+13573,Repertorium kleine politieke partijen 1918-1967 (Person)
+13574,most populous urban area
+13589,reason for no value
+13593,cosplay of
+13602,single taken from the album
+13612,breed belongs to taxon
+13616,Debian Wiki article
