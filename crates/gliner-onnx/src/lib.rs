@@ -753,6 +753,38 @@ impl GlinerOnnx {
                 });
             }
         }
+        // Drop pairs whose between-span swallows another real-world
+        // mention: the scorer liked a shared word, not a direct relation
+        // ("[Jobs] was CEO of Apple until [2011]" must not yield a CEO edge
+        // to 2011). Descriptors (technology/concept/date) don't block — a
+        // "CEO" technology tag must not veto the (person, org) edge around
+        // it. Overlapping spans are left for dedup.
+        let real_mention = |qi: usize| -> bool {
+            matches!(
+                entity_labels.get(qi).map(|s| s.as_str()),
+                Some("person" | "organization" | "location" | "product" | "event")
+            )
+        };
+        pairs.retain(|p| {
+            let (lo, hi) = if p.he <= p.ts {
+                (p.he, p.ts)
+            } else if p.te <= p.hs {
+                (p.te, p.hs)
+            } else {
+                return true;
+            };
+            !cands.iter().enumerate().any(|(qi, qs)| {
+                real_mention(qi)
+                    && qs.iter().any(|&(s, e, prob, valid)| {
+                        valid
+                            && prob >= ARGUMENT_THRESHOLD
+                            && s >= lo
+                            && e <= hi
+                            && (s, e) != (p.hs, p.he)
+                            && (s, e) != (p.ts, p.te)
+                    })
+            })
+        });
         if pairs.is_empty() {
             return Ok(vec![]);
         }

@@ -62,6 +62,35 @@ fn open_ie_separates_unrelated_pairs() {
 }
 
 #[test]
+fn open_ie_ignores_swallowed_mentions() {
+    // "was CEO of Apple until" contains "ceo" but the (Jobs, 2011) pair
+    // spans Apple — a real-world mention — so it must not score as a CEO
+    // edge to 2011. The direct (Jobs, Apple) edge survives.
+    let mut m = GlinerOnnx::load(snapshot_dir()).expect("load nico snapshot");
+    let out = m
+        .extract_relations(
+            "Steve Jobs was CEO of Apple until 2011.",
+            &labels(),
+            &[],
+            0.5,
+        )
+        .expect("extract_relations");
+    eprintln!("{out:#?}");
+    // Raw phrase at this layer (the pipeline canonicalizes to the
+    // Wikidata label); what matters is the right pair, no date edge.
+    assert!(
+        out.iter().any(|r| r.head.text == "Steve Jobs"
+            && r.tail.text == "Apple"
+            && r.relation_type.contains("ceo")),
+        "missing Jobs->Apple CEO edge: {out:?}"
+    );
+    assert!(
+        !out.iter().any(|r| r.head.text.contains("2011") || r.tail.text.contains("2011")),
+        "spurious date edge: {out:?}"
+    );
+}
+
+#[test]
 fn open_ie_quiet_without_evidence() {
     let mut m = GlinerOnnx::load(snapshot_dir()).expect("load nico snapshot");
     let out = m
