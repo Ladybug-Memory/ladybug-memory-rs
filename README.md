@@ -1,6 +1,6 @@
 # ladybug-memory-rs
 
-Rust port of [ladybug-memory](../ladybug-memory): agent long-term memory on
+Rust port of [ladybug-memory](https://github.com/Ladybug-Memory/ladybug-memory): agent long-term memory on
 LadybugDB, with knowledge-graph extraction running **ONNX-only** — no Python,
 no torch at inference.
 
@@ -169,51 +169,6 @@ Tool `lb_memory` (`remember`/`search`), commands `/lb-remember`, `/lb-search`,
 (entity-less sentences are dropped by `--auto`, so transcripts are never
 copied) and `skills/lb-memory/SKILL.md`.
 
-## Gotchas (earned the hard way)
-
-- **Link liblbug shared, not static.** A statically linked binary dead-strips
-  the GDS/table-function symbols extensions need, so `LOAD EXTENSION FTS`
-  fails with `symbol not found ... getPhysicalPlan` even though the repo's
-  extension build is fine (verified: the 0.21.2 CLI loads it). `.cargo/config.toml`
-  pins shared linking + rpath; keep `LBUG_LIBRARY_DIR` in sync with the
-  `lbug` crate version on bump.
-- **SQLite intake is WAL-mode + FK-metadata, enforcement off.** The intake
-  DB enables WAL (the C++ tailer reads it) and declares endpoint FKs (the
-  extension resolves edge endpoints through them), but disables FK
-  *enforcement* per connection: conflict edges point at native graph ids
-  that don't exist in staging.
-- **Storage files are shared safely with the `lbug` CLI.** Verified both
-  directions on 0.22.3 binding ↔ bundled CLI: no migration, no lockout.
-  (Do not use the old `ladybug-rust` 0.18 checkout — different storage
-  version.) Still prefer copies when experimenting on live files.
-- **Relations are typed, open-schema.** Each remembered fact is embedded
-  and matched to the nearest of 64 Wikipedia-grounded page-type domains
-  (DBpedia instance counts + YAGO upper taxonomy + infobox transclusion
-  counts; AutoSchemaKG-style conceptualization, but pre-generated and
-  model-free at runtime — no LLM). The fact's top two domains supply the
-  extraction schema: entity labels (base set plus domain extras like
-  `award`) and a battery of described relation questions whose text *is*
-  the canonical edge label (`director`, `educated at`, `spouse` — all
-  verified Wikidata properties). The relation scorer answers the battery
-  in one pass per sentence clause; winners become typed edges directly,
-  with no mining and no canonicalization step. Anything below bar falls
-  back to co-occurrence (open schema preserved).
-  Every edge carries `valid_from`/`valid_to` (known-true interval, `""` =
-  unknown), `tense`, `viewpoint` (`fact` vs `opinion`, zero-shot classified
-  per fact) and confidence. Recall boosts hits whose adjacent typed
-  relations match the query ("who founded Apple" upranks the founder memory).
-  LLM fallback not needed.
-- **Pronouns resolve, they never fork.** "He/she/they/it" bind to the most
-  recent compatible entity (in-call order, then the store's most-touched
-  rows); unresolvable ones are dropped, never "He" nodes. A lone person
-  plus a role noun ("... is the CEO") links the most recent organization.
-- Recall is entity-boosted FTS (porter stemmer) with an offline-safe
-  substring fallback, plus typed-edge boosting whose cue matching covers
-  initialisms and the SQLite colloquial-alias table (`brother` hits
-  canonical `sibling` edges). Extraction itself is embedding-routed
-  (nearest schema domain per fact); schema lives in the same SQLite file
-  (`sk_domains`, `sk_relations`).
-
 ## Roadmap (rest of the python port)
 
 - [x] Entity extraction (graph nodes)
@@ -226,37 +181,7 @@ copied) and `skills/lb-memory/SKILL.md`.
 - [x] Hybrid fact categorization (rule cues, classifier fallback for `General`)
 - [x] SQLite-first ingestion (intake log -> GLiNER -> `node_*`/`rel_*` staging -> sync tick)
 - [x] `lbug` 0.22.3
-- [ ] Extension-driven replication without fallback (blocked on the proposals below)
+- [x] Extension-driven replication without fallback
 - [ ] Typed relations (export scorer or LLM fallback)
-
-## Extension change proposals (need review — NOT implemented)
-
-The `sqlite` extension itself is untouched. Two behaviors block a pure
-extension-driven replication onto our pre-existing tables; both verified
-against the real build above:
-
-- **P1 — edge `_sqlite_rowid` slot on pre-existing rel tables.** Edge
-  upserts unconditionally `MATCH ()-[e:Label {_sqlite_rowid: …}]` and
-  `CREATE … {_sqlite_rowid: …}` (`sync_cypher.cpp::buildEdgeUpserts`). Our
-  native `MentionedIn`/`RelatesTo`/`ConflictsWith` tables don't have that
-  property, so the tick fails with `Binder exception: Cannot find property
-  _sqlite_rowid for e` after the node statements already committed.
-  Implemented as
-  [extensions#143](https://github.com/LadybugDB/extensions/pull/143)
-  (stacked on #142, option (b)): `ALTER TABLE <label> ADD IF NOT EXISTS
-  _sqlite_rowid INT64` per mapped edge table in the DDL phase.
-- **P2 — tick atomicity.** Node statements commit before a later edge
-  statement fails, leaving a partial tick (observed: 1 staged memory landed
-  natively, edges missing). Implemented as
-  [extensions#142](https://github.com/LadybugDB/extensions/pull/142): one
-  SQLite WAL commit maps to one Ladybug transaction (batch + cursor commit
-  atomically, rollback on failure). The embedded fallback already
-  converges partial ticks (content/edge guards + cursor), so this only
-  matters for the pure-extension path.
-
-Verified working, no change needed: explicit label remapping
-(`register_node/edge` onto `Memory`/`Entity`/…), MERGE-by-PK with staged
-ids, `TEXT` -> `JSON` coercion for `aliases`/`cues`, `TIMESTAMP` omission
-(native defaults apply).
 - [ ] Embeddings + vector index (recall upgrade)
 - [ ] Dynamic per-type schema tables + schema discovery
