@@ -484,7 +484,7 @@ impl Store {
     // ---- reads ----
 
     pub fn list_entities(&self) -> Result<Vec<KnownEntity>> {
-        let rows = self.run("MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases", vec![])?;
+        let rows = self.run("MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, CAST(e.aliases AS STRING)", vec![])?;
         rows.iter().map(|row| row_to_known(row)).collect()
     }
 
@@ -558,7 +558,7 @@ impl Store {
         if self.fts_ready {
             let cypher = format!(
                 "CALL QUERY_FTS_INDEX('Memory', 'memory_content_fts', $q, top := {}) WITH node AS m, score WHERE {where_}{status_filter} \
-                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at, score ORDER BY score DESC",
+                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at, score ORDER BY score DESC",
                 clamp_limit(limit) * 2
             );
             let mut p = Self::params_to_borrowed(&params);
@@ -598,7 +598,7 @@ impl Store {
             .collect();
         let cypher = format!(
             "MATCH (m:Memory) WHERE ({}) AND {where_}{status_filter} \
-             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at \
+             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at \
              ORDER BY m.importance DESC LIMIT {}",
             ors.join(" OR "),
             clamp_limit(limit) * 3
@@ -640,7 +640,7 @@ impl Store {
         let (where_, params) = self.scope_where("m", user, project, session);
         let cypher = format!(
             "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE e.canonical_name = $canonical AND m.status = 'active' AND {where_} \
-             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at, r.confidence \
+             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at, r.confidence \
              ORDER BY r.confidence DESC LIMIT {}",
             clamp_limit(limit)
         );
@@ -673,7 +673,7 @@ impl Store {
     ) -> Result<Vec<(MemoryEntry, f64)>> {
         let cypher = format!(
             "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE e.canonical_name = $canonical AND m.status = 'active' AND m.user_id = $user \
-             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at, r.confidence \
+             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at, r.confidence \
              ORDER BY r.confidence DESC LIMIT {}",
             clamp_limit(limit)
         );
@@ -693,7 +693,7 @@ impl Store {
         if self.fts_ready {
             let cypher = format!(
                 "CALL QUERY_FTS_INDEX('Memory', 'memory_content_fts', $q, top := {}) WITH node AS m, score WHERE m.user_id = $user AND m.status = 'active' \
-                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at, score ORDER BY score DESC",
+                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at, score ORDER BY score DESC",
                 clamp_limit(limit) * 2
             );
             match self.run(
@@ -722,7 +722,7 @@ impl Store {
             .collect();
         let cypher = format!(
             "MATCH (m:Memory) WHERE ({}) AND m.user_id = $user AND m.status = 'active' \
-             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at \
+             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at \
              ORDER BY m.importance DESC LIMIT {}",
             ors.join(" OR "),
             clamp_limit(limit) * 3
@@ -754,7 +754,7 @@ impl Store {
         let rows = self.run(
             &format!(
                 "MATCH (m:Memory) WHERE m.user_id = $user AND m.status = 'active' \
-                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at \
+                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at \
                  ORDER BY m.category, m.importance DESC LIMIT {}",
                 clamp_limit(limit)
             ),
@@ -817,7 +817,7 @@ impl Store {
 
     pub fn get_memory(&self, id: i64) -> Result<Option<MemoryEntry>> {
         let rows = self.run(
-            "MATCH (m:Memory) WHERE m.id = $id RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at",
+            "MATCH (m:Memory) WHERE m.id = $id RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at",
             vec![("id", Value::Int64(id))],
         )?;
         rows.first().map(row_to_entry).transpose()
@@ -835,7 +835,7 @@ impl Store {
         let status_filter = if include_non_active { "" } else { " AND m.status = 'active'" };
         let cypher = format!(
             "MATCH (m:Memory) WHERE {where_}{status_filter} \
-             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at \
+             RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at \
              ORDER BY m.category, m.importance DESC LIMIT {}",
             clamp_limit(limit)
         );
@@ -865,7 +865,7 @@ impl Store {
         let rows = self.run(
             &format!(
                 "MATCH (m:Memory) WHERE m.status = 'needs_review' OR m.status = 'quarantined' \
-                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, m.provenance, m.created_at, m.updated_at \
+                 RETURN m.id, m.content, m.category, m.user_id, m.project, m.session_id, m.importance, m.status, CAST(m.provenance AS STRING), m.created_at, m.updated_at \
                  ORDER BY m.created_at DESC LIMIT {}",
                 clamp_limit(limit)
             ),
@@ -886,20 +886,16 @@ impl Store {
 
         let rows = self.run(
             &format!(
-                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases LIMIT {node_limit}"
+                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, CAST(e.aliases AS STRING) LIMIT {node_limit}"
             ),
             vec![],
         )?;
         for r in &rows {
             let canonical = as_string(&r[1]).unwrap_or_default();
-            let aliases: Vec<String> = match &r[3] {
-                Value::Json(JsonValue::Array(arr)) => arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .filter(|a| a != &canonical)
-                    .collect(),
-                _ => Vec::new(),
-            };
+            let aliases: Vec<String> = parse_alias_list(&r[3], &canonical)
+                .into_iter()
+                .filter(|a| a != &canonical)
+                .collect();
             nodes.push(SnapshotNode {
                 id: as_i64(&r[0])?,
                 kind: SnapshotNodeKind::Entity,
@@ -950,7 +946,7 @@ impl Store {
             ),
             (
                 format!(
-                    "MATCH (a:Memory)-[r:ConflictsWith]->(b:Memory) RETURN a.id, b.id, r.cues, 0.0, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
+                    "MATCH (a:Memory)-[r:ConflictsWith]->(b:Memory) RETURN a.id, b.id, CAST(r.cues AS STRING), 0.0, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence LIMIT {edge_limit}"
                 ),
                 "ConflictsWith",
                 SnapshotNodeKind::Memory,
@@ -1037,7 +1033,7 @@ impl Store {
     pub fn recent_entities(&self, limit: usize) -> Result<Vec<KnownEntity>> {
         let rows = self.run(
             &format!(
-                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, e.aliases ORDER BY e.updated_at DESC LIMIT {}",
+                "MATCH (e:Entity) RETURN e.id, e.canonical_name, e.entity_type, CAST(e.aliases AS STRING) ORDER BY e.updated_at DESC LIMIT {}",
                 limit.clamp(1, 50)
             ),
             vec![],
@@ -1047,15 +1043,19 @@ impl Store {
 
     pub fn conflicts_of(&self, memory_id: i64) -> Result<Vec<(i64, Vec<String>)>> {
         let rows = self.run(
-            "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE a.id = $id RETURN b.id, c.cues",
+            "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE a.id = $id RETURN b.id, CAST(c.cues AS STRING)",
             vec![("id", Value::Int64(memory_id))],
         )?;
         rows.iter()
             .map(|r| {
+                // CAST(... AS STRING) above, so this is text; accept
+                // direct JSON too in case the query ever reverts.
                 let cues = match &r[1] {
                     Value::Json(JsonValue::Array(arr)) => {
                         arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
                     }
+                    Value::Json(other) => parse_string_list_text(&other.to_string()),
+                    Value::String(s) => parse_string_list_text(s),
                     _ => vec![],
                 };
                 Ok((as_i64(&r[0])?, cues))
@@ -1122,14 +1122,74 @@ fn first_id(rows: &[Vec<Value>]) -> Result<i64> {
     rows.first().map(|r| as_i64(&r[0])).transpose()?.ok_or_else(|| anyhow!("no id returned"))
 }
 
+/// Parse a string-list column that may arrive as `Value::Json` (direct
+/// select) or `Value::String` (via `CAST(col AS STRING)`, which is what
+/// all readers use). Never fails: corrupt payloads fall back to a
+/// best-effort Ladybug-list parse (`[a,b]` without quotes, as written by a
+/// bad manual dedup), then to `vec![canonical]`.
+fn parse_alias_list(v: &Value, canonical: &str) -> Vec<String> {
+    let mut out = match v {
+        Value::Json(JsonValue::Array(arr)) => arr
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect(),
+        Value::Json(other) => parse_string_list_text(&other.to_string()),
+        Value::String(s) => parse_string_list_text(s),
+        Value::List(_, items) => items
+            .iter()
+            .filter_map(|x| match x {
+                Value::String(s) => Some(s.clone()),
+                Value::Json(JsonValue::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    if out.is_empty() {
+        out.push(canonical.to_string());
+    }
+    // Preserve order, drop exact dupes (the dedup left e.g. Berkeley twice).
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|a| seen.insert(a.clone()));
+    out
+}
+
+/// Parse `["a","b"]` JSON first; on failure parse Ladybug display lists
+/// like `[a,b]` (unquoted) by splitting on commas and stripping
+/// whitespace/quotes. Entries containing commas cannot round-trip
+/// through that format — they arrive split — so this is strictly a
+/// last-resort repair path; writers always store real JSON.
+fn parse_string_list_text(s: &str) -> Vec<String> {
+    let t = s.trim();
+    if t.is_empty() || t == "null" {
+        return Vec::new();
+    }
+    if let Ok(JsonValue::Array(arr)) = serde_json::from_str::<JsonValue>(t) {
+        return arr.into_iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+    }
+    let inner = t.strip_prefix('[').and_then(|x| x.strip_suffix(']')).unwrap_or(t);
+    inner
+        .split(',')
+        .map(|p| p.trim().trim_matches('"').trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Parse a provenance column arriving as `Value::Json` or as
+/// `CAST(... AS STRING)` text. Corrupt payloads yield `default()`.
+fn parse_provenance(v: &Value) -> Provenance {
+    match v {
+        Value::Json(j) => serde_json::from_value(j.clone()).unwrap_or_default(),
+        Value::String(s) => serde_json::from_str(s).unwrap_or_default(),
+        _ => Provenance::default(),
+    }
+}
+
 pub(crate) fn row_to_known(row: &Vec<Value>) -> Result<KnownEntity> {
     let id = as_i64(&row[0])?;
     let canonical = as_string(&row[1])?;
     let entity_type = as_string(&row[2])?;
-    let aliases: Vec<String> = match &row[3] {
-        Value::Json(JsonValue::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-        _ => vec![canonical.clone()],
-    };
+    let aliases = parse_alias_list(&row[3], &canonical);
     let aliases = if aliases.is_empty() { vec![canonical.clone()] } else { aliases };
     Ok(KnownEntity {
         id,
@@ -1139,6 +1199,40 @@ pub(crate) fn row_to_known(row: &Vec<Value>) -> Result<KnownEntity> {
         alias_normalized: aliases.iter().map(|a| crate::resolve::normalize(a)).collect(),
         aliases,
     })
+}
+
+#[cfg(test)]
+mod resilient_parse_tests {
+    use super::*;
+
+    #[test]
+    fn valid_json_array_parses() {
+        let v = Value::String(r#"["a","b"]"#.to_string());
+        assert_eq!(parse_alias_list(&v, "a"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn ladybug_unquoted_list_parses_without_panic() {
+        // As written by the bad manual dedup: no quotes, not valid JSON.
+        let v = Value::String("[J. Robert Oppenheimer,Oppenheimer]".to_string());
+        assert_eq!(
+            parse_alias_list(&v, "J. Robert Oppenheimer"),
+            vec!["J. Robert Oppenheimer".to_string(), "Oppenheimer".to_string()]
+        );
+    }
+
+    #[test]
+    fn corrupt_provenance_falls_back_to_default() {
+        let v = Value::String("not json at all".to_string());
+        let p = parse_provenance(&v);
+        assert!(p.extractor.is_empty() && p.message_refs.is_empty());
+    }
+
+    #[test]
+    fn direct_json_value_still_parses() {
+        let v = Value::Json(JsonValue::Array(vec![JsonValue::String("x".into())]));
+        assert_eq!(parse_alias_list(&v, "x"), vec!["x".to_string()]);
+    }
 }
 
 pub fn as_i64(v: &Value) -> Result<i64> {
@@ -1180,10 +1274,7 @@ fn as_timestamp_string(v: &Value) -> String {
 }
 
 fn row_to_entry(row: &Vec<Value>) -> Result<MemoryEntry> {
-    let provenance: Provenance = match &row[8] {
-        Value::Json(j) => serde_json::from_value(j.clone()).unwrap_or_default(),
-        _ => Provenance::default(),
-    };
+    let provenance: Provenance = parse_provenance(&row[8]);
     let session = as_string(&row[5]).unwrap_or_default();
     Ok(MemoryEntry {
         id: as_i64(&row[0])?,
