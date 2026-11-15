@@ -186,17 +186,18 @@ copied) and `skills/lb-memory/SKILL.md`.
   directions on 0.22.3 binding ↔ bundled CLI: no migration, no lockout.
   (Do not use the old `ladybug-rust` 0.18 checkout — different storage
   version.) Still prefer copies when experimenting on live files.
-- **Relations are typed, open-schema.** Each remembered fact goes through
-  `extract_relations` (zero-shot: no declared ontology — the scorer judges
-  relatedness under a generic query and the phrase is mined from the
-  between-span surface, e.g. `founded`, `runs`). Typed pairs become directed
-  `RelatesTo` edges; pairs with no typed edge keep the old `coOccurs` fallback.
-  Mined phrases canonicalize against a 3,063-label Wikidata property table
-  (`edge_meta.duckdb` export, baked in as `wikidata_properties.csv` — exact
-  label, initialism (`ceo`), token-cover, then glue-tolerant prefix match;
-  pairs whose span swallows another real-world mention are dropped),
-  so `great ceo of`, `ceo since` and `ceo` all land as one `chief executive
-  officer` edge. Misses stay raw (open schema preserved).
+- **Relations are typed, open-schema.** Each remembered fact is embedded
+  and matched to the nearest of 64 Wikipedia-grounded page-type domains
+  (DBpedia instance counts + YAGO upper taxonomy + infobox transclusion
+  counts; AutoSchemaKG-style conceptualization, but pre-generated and
+  model-free at runtime — no LLM). The fact's top two domains supply the
+  extraction schema: entity labels (base set plus domain extras like
+  `award`) and a battery of described relation questions whose text *is*
+  the canonical edge label (`director`, `educated at`, `spouse` — all
+  verified Wikidata properties). The relation scorer answers the battery
+  in one pass per sentence clause; winners become typed edges directly,
+  with no mining and no canonicalization step. Anything below bar falls
+  back to co-occurrence (open schema preserved).
   Every edge carries `valid_from`/`valid_to` (known-true interval, `""` =
   unknown), `tense`, `viewpoint` (`fact` vs `opinion`, zero-shot classified
   per fact) and confidence. Recall boosts hits whose adjacent typed
@@ -207,8 +208,11 @@ copied) and `skills/lb-memory/SKILL.md`.
   rows); unresolvable ones are dropped, never "He" nodes. A lone person
   plus a role noun ("... is the CEO") links the most recent organization.
 - Recall is entity-boosted FTS (porter stemmer) with an offline-safe
-  substring fallback. No embedding/vector search yet; schema is
-  forward-compatible (add an embedding column + index later).
+  substring fallback, plus typed-edge boosting whose cue matching covers
+  initialisms and the SQLite colloquial-alias table (`brother` hits
+  canonical `sibling` edges). Extraction itself is embedding-routed
+  (nearest schema domain per fact); schema lives in the same SQLite file
+  (`sk_domains`, `sk_relations`).
 
 ## Roadmap (rest of the python port)
 

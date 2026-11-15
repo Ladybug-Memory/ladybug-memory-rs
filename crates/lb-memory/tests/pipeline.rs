@@ -59,6 +59,7 @@ fn remember_new_fact_writes_graph() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
     let mut ex = FakeExtractor {
+        embed_vec: None,
         mentions: vec![mention("Tim Cook", "person", 0.99), mention("Apple", "organization", 0.98)],
         classify_scores: vec![],
         relations: vec![],
@@ -86,7 +87,7 @@ fn remember_new_fact_writes_graph() {
 fn duplicate_strengthens_instead_of_writing() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![], relations: vec![] };
+    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![], relations: vec![], embed_vec: None };
     let first = pipe.remember(&mut ex, "User prefers Python for scripting.", &scope(), None, prov()).unwrap();
     assert!(matches!(first[0].decision, FactDecision::New { .. }));
     let id = first[0].written.as_ref().unwrap().id;
@@ -109,7 +110,7 @@ fn duplicate_strengthens_instead_of_writing() {
 fn conflict_goes_to_review_with_provenance() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![], relations: vec![] };
+    let mut ex = FakeExtractor { mentions: vec![mention("Python", "technology", 0.95)], classify_scores: vec![], relations: vec![], embed_vec: None };
     pipe.remember(&mut ex, "User prefers Python for scripting.", &scope(), None, prov()).unwrap();
     let reports =
         pipe.remember(&mut ex, "User hates Python for scripting.", &scope(), None, prov()).unwrap();
@@ -140,7 +141,7 @@ fn conflict_goes_to_review_with_provenance() {
 fn low_confidence_is_quarantined_not_dropped() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![], relations: vec![] };
+    let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![], relations: vec![], embed_vec: None };
     let reports = pipe.remember(&mut ex, "Hmm, vague rambling without names.", &scope(), None, prov()).unwrap();
     assert!(matches!(reports[0].decision, FactDecision::LowConfidence { .. }));
     assert_eq!(reports[0].written.as_ref().unwrap().status, MemoryStatus::Quarantined);
@@ -152,9 +153,9 @@ fn low_confidence_is_quarantined_not_dropped() {
 fn alias_surfaces_merge_onto_canonical() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let mut ex = FakeExtractor { mentions: vec![mention("LadybugDB", "technology", 0.9)], classify_scores: vec![], relations: vec![] };
+    let mut ex = FakeExtractor { mentions: vec![mention("LadybugDB", "technology", 0.9)], classify_scores: vec![], relations: vec![], embed_vec: None };
     pipe.remember(&mut ex, "LadybugDB is a graph database.", &scope(), None, prov()).unwrap();
-    let mut ex2 = FakeExtractor { mentions: vec![mention("ladybugdb", "technology", 0.88)], classify_scores: vec![], relations: vec![] };
+    let mut ex2 = FakeExtractor { mentions: vec![mention("ladybugdb", "technology", 0.88)], classify_scores: vec![], relations: vec![], embed_vec: None };
     let reports = pipe.remember(&mut ex2, "ladybugdb stores the memory graph.", &scope(), None, prov()).unwrap();
     assert!(!reports[0].resolved[0].created, "alias must merge, not fork");
     let entities = store.list_entities().unwrap();
@@ -169,6 +170,7 @@ fn model_category_fills_rule_gap() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
     let mut ex = FakeExtractor {
+        embed_vec: None,
         mentions: vec![mention("Tim Cook", "person", 0.99)],
         classify_scores: vec![("work".to_string(), 0.94), ("general".to_string(), 0.68)],
         relations: vec![],
@@ -186,6 +188,7 @@ fn rules_win_over_model() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
     let mut ex = FakeExtractor {
+        embed_vec: None,
         mentions: vec![mention("Python", "technology", 0.95)],
         classify_scores: vec![("work".to_string(), 0.99)],
         relations: vec![],
@@ -203,6 +206,7 @@ fn auto_drops_acknowledgments() {
     let store = Store::ephemeral().unwrap();
     let pipe = Pipeline::new(&store, PipelineOptions::default());
     let mut ex = FakeExtractor {
+        embed_vec: None,
         mentions: vec![mention("Python", "technology", 0.95)],
         classify_scores: vec![],
         relations: vec![],
@@ -232,6 +236,7 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Tim Cook", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![],
             relations: vec![],
@@ -264,6 +269,7 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Python", "technology", 0.95)],
             classify_scores: vec![],
             relations: vec![],
@@ -285,6 +291,7 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Python", "technology", 0.95)],
             classify_scores: vec![],
             relations: vec![],
@@ -309,6 +316,7 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Python", "technology", 0.95)],
             classify_scores: vec![],
             relations: vec![],
@@ -333,6 +341,7 @@ mod sqlite_first {
         assert!(db.path().ends_with("mem.intake.sqlite"), "got {}", db.path());
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("LadybugDB", "technology", 0.9)],
             classify_scores: vec![],
             relations: vec![],
@@ -482,20 +491,21 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![],
-            relations: vec![rel("Steve Jobs", "Apple", "founded")],
+            relations: vec![rel("Steve Jobs", "Apple", "director")],
         };
-        pipe.remember(&mut ex, "Steve Jobs founded Apple.", &scope(), None, prov()).unwrap();
+        pipe.remember(&mut ex, "Steve Jobs directed Apple.", &scope(), None, prov()).unwrap();
         // Exactly one edge, typed — no coOccurs twin.
         assert_eq!(
             store.relates_to_labels().unwrap(),
-            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded by".to_string())]
+            vec![("Steve Jobs".to_string(), "Apple".to_string(), "director".to_string())]
         );
         // Recall surfaces the relation on the hit.
-        let hits = pipe.recall("who founded Apple", &scope(), 5).unwrap();
+        let hits = pipe.recall("who directs Apple", &scope(), 5).unwrap();
         assert!(!hits.is_empty());
-        assert!(hits[0].relations.iter().any(|r| r.contains("founded")), "{:?}", hits[0].relations);
+        assert!(hits[0].relations.iter().any(|r| r.contains("director")), "{:?}", hits[0].relations);
     }
 
     #[test]
@@ -503,6 +513,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Tim Cook", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![],
             relations: vec![],
@@ -519,18 +530,19 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![],
-            relations: vec![rel("Steve Jobs", "Apple", "founded")],
+            relations: vec![rel("Steve Jobs", "Apple", "director")],
         };
         let (reports, stats) =
-            pipe.remember_via_sqlite(&mut ex, &db, "Steve Jobs founded Apple.", &scope(), None, prov(), None)
+            pipe.remember_via_sqlite(&mut ex, &db, "Steve Jobs directed Apple.", &scope(), None, prov(), None)
                 .unwrap();
         assert_eq!(stats.via, "embedded");
         assert!(reports[0].written.is_some());
         assert_eq!(
             store.relates_to_labels().unwrap(),
-            vec![("Steve Jobs".to_string(), "Apple".to_string(), "founded by".to_string())]
+            vec![("Steve Jobs".to_string(), "Apple".to_string(), "director".to_string())]
         );
         // Re-tick converges with no duplicate edge.
         let second = pipe.sync_intake(&db, None).unwrap();
@@ -539,23 +551,25 @@ mod sqlite_first {
     }
 
     #[test]
-    fn variant_phrases_collapse_to_one_canonical_label() {
+    fn duplicate_typed_edges_dedup() {
+        // The scorer emits canonical labels; sloppy duplicate spans for one
+        // pair collapse onto a single typed edge (best score wins).
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
-        // "great ceo of" and "ceo" must land as the same canonical edge.
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![("fact".to_string(), 0.9)],
-            relations: vec![scirel("Steve Jobs", "Apple", "great ceo of")],
+            relations: vec![
+                scirel("Steve Jobs", "Apple", "director"),
+                scirel("Steve Jobs", "Apple", "director"),
+            ],
         };
-        pipe.remember(&mut ex, "Steve Jobs was a great CEO of Apple.", &scope(), None, prov()).unwrap();
-        ex.mentions = vec![mention("John Ternus", "person", 0.95), mention("Apple", "organization", 0.98)];
-        ex.relations = vec![scirel("John Ternus", "Apple", "ceo")];
-        pipe.remember(&mut ex, "John Ternus is the CEO of Apple.", &scope(), None, prov()).unwrap();
-        let edges = store.relates_to_labels().unwrap();
-        let kinds: std::collections::HashSet<String> =
-            edges.iter().filter(|(_, _, t)| t != &"coOccurs").map(|(_, _, t)| t.clone()).collect();
-        assert_eq!(kinds, ["chief executive officer".to_string()].into_iter().collect(), "{edges:?}");
+        pipe.remember(&mut ex, "Steve Jobs directed Apple.", &scope(), None, prov()).unwrap();
+        assert_eq!(
+            store.relates_to_labels().unwrap(),
+            vec![("Steve Jobs".to_string(), "Apple".to_string(), "director".to_string())]
+        );
     }
 
     #[test]
@@ -564,6 +578,7 @@ mod sqlite_first {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         // Lower id, no typed relation.
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Apple", "organization", 0.98), mention("Vision Pro", "product", 0.9)],
             classify_scores: vec![],
             relations: vec![],
@@ -571,14 +586,14 @@ mod sqlite_first {
         pipe.remember(&mut ex, "Apple released Vision Pro.", &scope(), None, prov()).unwrap();
         // Higher id, founder relation — the boost must outrank id order.
         ex.mentions = vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)];
-        ex.relations = vec![rel("Steve Jobs", "Apple", "founded")];
+        ex.relations = vec![rel("Steve Jobs", "Apple", "director")];
         let second =
-            pipe.remember(&mut ex, "Steve Jobs founded Apple.", &scope(), None, prov()).unwrap();
+            pipe.remember(&mut ex, "Steve Jobs directed Apple.", &scope(), None, prov()).unwrap();
         let winner = second[0].written.as_ref().unwrap().id;
-        let hits = pipe.recall("founder Apple", &scope(), 5).unwrap();
+        let hits = pipe.recall("director Apple", &scope(), 5).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].entry.id, winner, "typed-relation boost should outrank id order");
-        assert!(hits[0].relations.iter().any(|r| r == "founded by via Steve Jobs"), "{:?}", hits[0].relations);
+        assert!(hits[0].relations.iter().any(|r| r == "director via Steve Jobs"), "{:?}", hits[0].relations);
     }
 
     fn scirel(head: &str, tail: &str, kind: &str) -> lb_memory::types::ScoredRelation {
@@ -597,6 +612,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![
                 mention("Steve Jobs", "person", 0.99),
                 mention("Apple", "organization", 0.98),
@@ -622,6 +638,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Steve Jobs", "person", 0.99)],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![],
@@ -639,6 +656,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("He", "person", 0.9)],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![],
@@ -656,6 +674,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Apple", "organization", 0.98)],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![],
@@ -666,7 +685,7 @@ mod sqlite_first {
         assert!(reports[0].written.is_some());
         let edges = store.relates_to_labels().unwrap();
         assert!(
-            edges.iter().any(|(a, b, t)| a == "John Ternus" && b == "Apple" && t == "chief executive officer"),
+            edges.iter().any(|(a, b, t)| a == "John Ternus" && b == "Apple" && t == "ceo"),
             "{edges:?}"
         );
     }
@@ -676,6 +695,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![
                 mention("Steve Jobs", "person", 0.99),
                 mention("Apple", "organization", 0.98),
@@ -698,6 +718,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![
                 mention("Steve Jobs", "person", 0.99),
                 mention("Apple", "organization", 0.98),
@@ -705,15 +726,15 @@ mod sqlite_first {
             ],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![
-                scirel("Steve Jobs", "Apple", "founded"),
+                scirel("Steve Jobs", "Apple", "director"),
                 scirel("Steve Jobs", "1976", "until"),
             ],
         };
         pipe.remember(&mut ex, "Steve Jobs founded Apple in 1976.", &scope(), None, prov()).unwrap();
         let edges = store.relates_to_labels().unwrap();
-        // The real typed edge survives (canonicalized).
+        // The real typed edge survives; the date endpoint is dropped.
         assert!(
-            edges.iter().any(|(a, b, t)| a == "Steve Jobs" && b == "Apple" && t == "founded by"),
+            edges.iter().any(|(a, b, t)| a == "Steve Jobs" && b == "Apple" && t == "director"),
             "{edges:?}"
         );
         // No typed edge touches the date; co-occurrences may.
@@ -728,6 +749,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("John Ternus", "person", 0.95), mention("Apple", "organization", 0.98)],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![],
@@ -748,14 +770,15 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("Steve Jobs", "person", 0.99), mention("Apple", "organization", 0.98)],
             classify_scores: vec![("opinion".to_string(), 0.85)],
-            relations: vec![scirel("Steve Jobs", "Apple", "founded")],
+            relations: vec![scirel("Steve Jobs", "Apple", "director")],
         };
-        pipe.remember(&mut ex, "Steve Jobs was a great CEO of Apple.", &scope(), None, prov()).unwrap();
+        pipe.remember(&mut ex, "Steve Jobs directed Apple.", &scope(), None, prov()).unwrap();
         let edges = store.relates_to_full().unwrap();
         let found = edges.iter().find(|(_, _, kind, _, _, _, _, vp, vpc)| {
-            kind == &"founded by" && vp == &"opinion" && (*vpc - 0.85).abs() < 1e-6
+            kind == &"director" && vp == &"opinion" && (*vpc - 0.85).abs() < 1e-6
         });
         assert!(found.is_some(), "typed opinion edge missing: {edges:?}");
     }
@@ -767,6 +790,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![
                 mention("Steve Jobs", "person", 0.99),
                 mention("Apple", "organization", 0.98),
@@ -811,6 +835,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let mut ex = FakeExtractor {
+            embed_vec: None,
             mentions: vec![mention("John", "person", 0.95)],
             classify_scores: vec![("fact".to_string(), 0.9)],
             relations: vec![],
@@ -831,7 +856,7 @@ mod sqlite_first {
         let store = Store::ephemeral().unwrap();
         let pipe = Pipeline::new(&store, PipelineOptions::default());
         let db = intake();
-        let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![], relations: vec![] };
+        let mut ex = FakeExtractor { mentions: vec![], classify_scores: vec![], relations: vec![], embed_vec: None };
         let (reports, _) =
             pipe.remember_via_sqlite(&mut ex, &db, "Hmm, vague rambling without names.", &scope(), None, prov(), None)
                 .unwrap();
@@ -839,4 +864,7 @@ mod sqlite_first {
         assert_eq!(reports[0].written.as_ref().unwrap().status, MemoryStatus::Quarantined);
         assert!(pipe.recall("rambling", &scope(), 5).unwrap().is_empty());
     }
+
+
+
 }

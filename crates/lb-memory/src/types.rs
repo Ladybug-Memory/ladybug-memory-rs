@@ -226,12 +226,15 @@ pub struct ScoredRelation {
 }
 
 /// A relation type to score, with head/tail entity-type constraints.
-/// Zero-shot: any type name works.
+/// Zero-shot: any type name works; `description` carries the natural
+/// phrasing the scorer reads ("X was educated at Y").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationSpec {
     pub relation_type: String,
     pub head_types: Vec<String>,
     pub tail_types: Vec<String>,
+    pub description: Option<String>,
+    pub allow_self: bool,
 }
 
 impl RelationSpec {
@@ -240,6 +243,13 @@ impl RelationSpec {
             relation_type: relation_type.to_string(),
             head_types: head_types.iter().map(|s| s.to_string()).collect(),
             tail_types: tail_types.iter().map(|s| s.to_string()).collect(),
+            description: None,
+            allow_self: false,
         }
+    }
+
+    pub fn with_description(mut self, description: &str) -> Self {
+        self.description = Some(description.to_string());
+        self
     }
 }

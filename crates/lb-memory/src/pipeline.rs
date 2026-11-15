@@ -51,10 +51,6 @@ struct FactPlan {
     tense: String,
 }
 
-fn default_entity_labels() -> Vec<String> {
-    crate::model::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
-}
-
 /// Labels for model-based fact categorization (must match `Category`).
 /// Used only when rule cues abstain (`General`) — deterministic first,
 /// model as fallback.
@@ -98,15 +94,20 @@ impl<'s> Pipeline<'s> {
     // ---- step 1 ----
 
     /// Extract mentions per chunk, rebasing spans to fact-relative offsets.
-    /// Returns `(fact_text, fact_relative_mentions)` per fact.
+    /// Returns `(fact_text, fact_relative_mentions, domain)` per fact.
+    /// The domain comes first: the fact text is embedded, the nearest
+    /// schema domain is selected, and extraction runs with that domain's
+    /// labels (base labels plus domain extras).
     fn extract_facts(
         &self,
         extractor: &mut dyn Extractor,
         text: &str,
         per_sentence: bool,
-    ) -> Result<Vec<(String, Vec<ScoredMention>)>> {
+    ) -> Result<Vec<(String, Vec<ScoredMention>, Vec<String>)>> {
         if !per_sentence {
-            return Ok(vec![self.extract_one(extractor, text, 0)?]);
+            let domains = self.select_domains(extractor, text);
+            let (fact_text, mentions) = self.extract_one(extractor, text, 0, &domains)?;
+            return Ok(vec![(fact_text, mentions, domains)]);
         }
         let mut facts = Vec::new();
         for (sent, base, _span_end) in split_sentences(text) {
@@ -118,29 +119,46 @@ impl<'s> Pipeline<'s> {
             if is_acknowledgment(&sent) {
                 continue;
             }
-            let (fact_text, mentions) = self.extract_one(extractor, &sent, base)?;
+            let domains = self.select_domains(extractor, &sent);
+            let (fact_text, mentions) = self.extract_one(extractor, &sent, base, &domains)?;
             if !mentions.is_empty() {
-                facts.push((fact_text, mentions));
+                facts.push((fact_text, mentions, domains));
             }
         }
         Ok(facts)
     }
 
-    /// Extract over chunked text; `char_base` rebases chunk spans into the
-    /// caller's coordinate space, then into fact-relative space.
+    /// Ranked schema domains for text (best first, up to two), or just
+    /// `base` without an embedder. Facts are multi-facet; the battery
+    /// merges the top two (base questions always included).
+    fn select_domains(&self, extractor: &mut dyn Extractor, text: &str) -> Vec<String> {
+        let emb = extractor.embed(text).unwrap_or(None);
+        let mut ranked = crate::rel_canon::rank_domains(emb.as_deref());
+        ranked.truncate(2);
+        ranked
+    }
+
+    /// Extract over chunked text with the domain's labels; `char_base`
+    /// rebases chunk spans into the caller's coordinate space, then into
+    /// fact-relative space.
     fn extract_one(
         &self,
         extractor: &mut dyn Extractor,
         fact_text: &str,
         char_base: usize,
+        domains: &[String],
     ) -> Result<(String, Vec<ScoredMention>)> {
         let to_char = byte_to_char_map(fact_text);
         let chunker = LogicalChunker { max_unit_size: self.opts.max_chunk, ..Default::default() };
+        let labels = crate::rel_canon::domain_labels(
+            domains.first().map(|s| s.as_str()).unwrap_or("base"),
+            domains.get(1).map(|s| s.as_str()).unwrap_or("base"),
+        );
         let mut best: HashMap<(String, String), ScoredMention> = HashMap::new();
         for unit in chunker.chunk(fact_text) {
             // Chunk byte offsets -> fact char offsets.
             let chunk_char_start = byte_to_char(&to_char, unit.start);
-            for mut m in extractor.extract(&unit.text, self.opts.extract_threshold)? {
+            for mut m in extractor.extract(&unit.text, &labels, self.opts.extract_threshold)? {
                 // Generic surfaces ("User" in every preference) carry no
                 // graph information; drop them before resolution.
                 if is_generic_surface(&m.text) {
@@ -207,7 +225,7 @@ impl<'s> Pipeline<'s> {
     fn write_facts(
         &self,
         extractor: &mut dyn Extractor,
-        facts: Vec<(String, Vec<ScoredMention>)>,
+        facts: Vec<(String, Vec<ScoredMention>, Vec<String>)>,
         scope: &Scope,
         importance: Option<i64>,
         provenance: Provenance,
@@ -219,8 +237,8 @@ impl<'s> Pipeline<'s> {
         // Canonical names in resolution order: discourse context for
         // pronoun binding in later facts of this call.
         let mut recent_order: Vec<String> = Vec::new();
-        for (fact_text, extracted) in facts {
-            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known, &recent_order)?;
+        for (fact_text, extracted, domains) in facts {
+            let plan = self.plan_one(extractor, fact_text, extracted, &domains, scope, importance, &known, &recent_order)?;
             recent_order.extend(plan.resolved.iter().map(|r| crate::resolve::normalize(&r.canonical)));
             reports.push(self.commit_plan(plan, scope, &provenance, &mut known)?);
         }
@@ -235,6 +253,7 @@ impl<'s> Pipeline<'s> {
         extractor: &mut dyn Extractor,
         fact_text: String,
         extracted: Vec<ScoredMention>,
+        domains: &[String],
         scope: &Scope,
         importance: Option<i64>,
         known: &[KnownEntity],
@@ -316,41 +335,81 @@ impl<'s> Pipeline<'s> {
             }
         }
 
-        // Open-IE relations (step 4b): no declared schema — the scorer
-        // judges relatedness under one generic query and phrases are mined
-        // from the between-span surface. Skipped when nothing will be
-        // written; layouts without heads.onnx yield none and the pair falls
-        // back to co-occurrence.
+        // Typed relations (step 4b): the domain schema drives scoring —
+        // the fact's nearest schema domain supplies described questions
+        // and the winning question's label becomes the edge type directly
+        // (canonical by declaration). Skipped when nothing will be written;
+        // layouts without heads.onnx yield none and the pair falls back to
+        // co-occurrence.
         let mut relations = Vec::new();
         if duplicate_of.is_none() && !resolved.is_empty() {
+            // Battery from the DB: base questions plus the fact domain's.
+            // Empty head/tail lists mean unconstrained (any extracted type).
+            let d0 = domains.first().map(|s| s.as_str()).unwrap_or("base");
+            let d1 = domains.get(1).map(|s| s.as_str()).unwrap_or("base");
+            let entity_labels = crate::rel_canon::domain_labels(d0, d1);
+            let specs: Vec<crate::types::RelationSpec> = crate::rel_canon::battery_for(d0, d1)
+                .into_iter()
+                .map(|q| {
+                    let mut spec = crate::types::RelationSpec::new(
+                        &q.relation_type,
+                        &q.head_types.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                        &q.tail_types.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    );
+                    if !q.description.is_empty() {
+                        spec = spec.with_description(&q.description);
+                    }
+                    spec
+                })
+                .collect();
+            // Empty type lists are unconstrained: fall back to every
+            // extracted label so no pair is filtered out for lack of a
+            // declared type.
+            let specs: Vec<crate::types::RelationSpec> = specs
+                .into_iter()
+                .map(|mut spec| {
+                    if spec.head_types.is_empty() {
+                        spec.head_types = entity_labels.clone();
+                    }
+                    if spec.tail_types.is_empty() {
+                        spec.tail_types = entity_labels.clone();
+                    }
+                    spec
+                })
+                .collect();
             // Pairs come straight from the cleaned extracted mentions
             // (mapped onto each call's word routing by character offset):
             // no candidate pools, no top-k, no swallow heuristics.
             // Unmappable mentions are skipped, never guessed.
-            // Scored per sentence: the pair scorer degrades badly on long
-            // inputs (same pair scores 0.87 in-sentence vs <0.3 in a
-            // paragraph), so each sentence is an independent call.
-            for (sent_text, sent_start, sent_end) in crate::chunker::split_sentences(&fact_text) {
-                let mut mentions: Vec<ScoredMention> = Vec::new();
-                for c in compared.iter() {
-                    let m = &c.mention;
-                    if m.start >= sent_start && m.end <= sent_end && m.end > m.start {
-                        let mut shifted = m.clone();
-                        shifted.start -= sent_start;
-                        shifted.end -= sent_start;
-                        shifted.word_start = 0;
-                        shifted.word_end = 0;
-                        mentions.push(shifted);
+            // Scored per sentence, and per clause within `;`-joined
+            // sentences: the pair scorer degrades badly on long inputs
+            // (same pair scores 0.87 in-sentence vs <0.3 in a paragraph),
+            // so each clause is an independent call.
+            for (sent_text, sent_start, _sent_end) in crate::chunker::split_sentences(&fact_text) {
+                for (clause_text, clause_start, clause_end) in
+                    crate::chunker::split_clauses(&sent_text, sent_start)
+                {
+                    let mut mentions: Vec<ScoredMention> = Vec::new();
+                    for c in compared.iter() {
+                        let m = &c.mention;
+                        if m.start >= clause_start && m.end <= clause_end && m.end > m.start {
+                            let mut shifted = m.clone();
+                            shifted.start -= clause_start;
+                            shifted.end -= clause_start;
+                            shifted.word_start = 0;
+                            shifted.word_end = 0;
+                            mentions.push(shifted);
+                        }
                     }
-                }
-                if let Ok(rs) = extractor.extract_relations(
-                    &sent_text,
-                    &default_entity_labels(),
-                    &[],
-                    &mentions,
-                    self.opts.relation_threshold,
-                ) {
-                    relations.extend(rs);
+                    if let Ok(rs) = extractor.extract_relations(
+                        &clause_text,
+                        &entity_labels,
+                        &specs,
+                        &mentions,
+                        self.opts.relation_threshold,
+                    ) {
+                        relations.extend(rs);
+                    }
                 }
             }
             // Implicit argument completion: a lone person plus a role noun
@@ -391,17 +450,9 @@ impl<'s> Pipeline<'s> {
                 (String::new(), 0.0)
             };
 
-        // Canonicalize relation surfaces against the Wikidata property
-        // inventory: "great ceo of" and "ceo" both become "chief executive
-        // officer". Unmatched phrases stay open (raw surface). Applies to
-        // scored and implicit relations alike, before anything is written.
-        for rel in &mut relations {
-            if let Some((_, canonical)) =
-                crate::rel_canon::canonicalize_relation(&rel.relation_type)
-            {
-                rel.relation_type = canonical;
-            }
-        }
+        // Edge labels come from the battery verbatim (canonical by
+        // declaration) — no canonicalization step. Applies to scored and
+        // implicit relations alike, before anything is written.
         // Date endpoints are not typed relations: dates bound a relation
         // (valid_from/to), they don't participate in one. Drop edges whose
         // endpoint is a resolved date mention ("until 2011" must not yield
@@ -656,7 +707,7 @@ impl<'s> Pipeline<'s> {
         &self,
         extractor: &mut dyn Extractor,
         intake: &crate::sqlite_sync::IntakeDb,
-        facts: Vec<(String, Vec<ScoredMention>)>,
+        facts: Vec<(String, Vec<ScoredMention>, Vec<String>)>,
         scope: &Scope,
         importance: Option<i64>,
         provenance: Provenance,
@@ -665,8 +716,8 @@ impl<'s> Pipeline<'s> {
         let mut known = known;
         let mut recent_order: Vec<String> = Vec::new();
         let mut staged = Vec::new();
-        for (fact_text, extracted) in facts {
-            let plan = self.plan_one(extractor, fact_text, extracted, scope, importance, &known, &recent_order)?;
+        for (fact_text, extracted, domains) in facts {
+            let plan = self.plan_one(extractor, fact_text, extracted, &domains, scope, importance, &known, &recent_order)?;
             recent_order.extend(plan.resolved.iter().map(|r| crate::resolve::normalize(&r.canonical)));
             // stage_plan returns the report (`written: None` for
             // replicated facts) plus its intake id; the attach step resolves

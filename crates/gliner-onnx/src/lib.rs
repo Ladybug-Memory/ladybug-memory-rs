@@ -933,6 +933,86 @@ order.truncate(MAX_PAIRS);
         };
         Ok(Classification { task: task.to_string(), scores, chosen })
     }
+
+    /// Sentence embedding for vector search: mean-pool the encoder word
+    /// states over `text`, L2-normalized (768-dim, deberta-v3-base).
+    ///
+    /// Same encoder + same prompt normalization as extraction, so label
+    /// embeddings precomputed offline and query embeddings at remember
+    /// time live in one space: cosine is a dot product. A single dummy
+    /// entity label satisfies the prompt schema; its states are unused.
+    pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
+        anyhow::ensure!(!text.trim().is_empty(), "nothing to embed");
+        let built = self.build_inputs(text, &["entity".to_string()])?;
+        let seq_len = built.input_ids.len();
+        let n_words = built.words.len();
+        anyhow::ensure!(n_words > 0, "nothing to embed");
+        let input_ids =
+            Tensor::from_array((vec![1, seq_len as i64], built.input_ids.clone()))?.upcast();
+        let attention_mask =
+            Tensor::from_array((vec![1, seq_len as i64], vec![1i64; seq_len]))?.upcast();
+        // Per-word states, one row per word in order.
+        let states: Vec<f32> = match &mut self.backend {
+            Backend::Dankau { encoder, .. } => {
+                let outputs = encoder.run(ort::inputs![input_ids, attention_mask])?;
+                let (hshape, hdata) = outputs["hidden_states"].try_extract_tensor::<f32>()?;
+                let hdim: Vec<i64> = hshape.iter().copied().collect();
+                anyhow::ensure!(
+                    hdim == vec![1, seq_len as i64, 768],
+                    "unexpected encoder output shape {hdim:?}"
+                );
+                let mut states = vec![0f32; n_words * 768];
+                for (w, &pos) in built.word_first.iter().enumerate() {
+                    states[w * 768..(w + 1) * 768]
+                        .copy_from_slice(&hdata[pos * 768..(pos + 1) * 768]);
+                }
+                states
+            }
+            Backend::Nico { model, .. } => {
+                // Mirror `extract`: real word/query routing, empty rel block.
+                let word_idx: Vec<i64> = built.word_first.iter().map(|&p| p as i64).collect();
+                let query_idx: Vec<i64> = built.query_pos.iter().map(|&p| p as i64).collect();
+                let mouts = model.run(ort::inputs![
+                    "input_ids" => input_ids,
+                    "attention_mask" => attention_mask,
+                    "text_word_indices" => Tensor::from_array((vec![1, n_words as i64], word_idx))?.upcast(),
+                    "text_word_mask" => Tensor::from_array((vec![1, n_words as i64], vec![1.0f32; n_words]))?.upcast(),
+                    "query_marker_indices" => Tensor::from_array((vec![1, 1i64], query_idx))?.upcast(),
+                    "query_marker_mask" => Tensor::from_array((vec![1, 1i64], vec![1.0f32]))?.upcast(),
+                    "cls_marker_indices" => Tensor::from_array((vec![1, 0i64], Vec::<i64>::new()))?.upcast(),
+                    "cls_marker_mask" => Tensor::from_array((vec![1, 0i64], Vec::<f32>::new()))?.upcast(),
+                    "rel_marker_indices" => Tensor::from_array((vec![1, 0i64], Vec::<i64>::new()))?.upcast(),
+                    "rel_marker_mask" => Tensor::from_array((vec![1, 0i64], Vec::<f32>::new()))?.upcast()
+                ])?;
+                let (tshape, text_states) = mouts["text_states"].try_extract_tensor::<f32>()?;
+                let tdim: Vec<i64> = tshape.iter().copied().collect();
+                anyhow::ensure!(
+                    tdim == vec![1, n_words as i64, 768],
+                    "unexpected text_states shape {tdim:?}"
+                );
+                text_states.to_vec()
+            }
+        };
+        // Mean-pool over words, then L2-normalize so cosine is a dot product.
+        let mut emb = vec![0f32; 768];
+        for w in 0..n_words {
+            for d in 0..768 {
+                emb[d] += states[w * 768 + d];
+            }
+        }
+        let inv = 1.0 / n_words as f32;
+        let mut norm = 0f32;
+        for v in emb.iter_mut() {
+            *v *= inv;
+            norm += *v * *v;
+        }
+        let norm = norm.sqrt();
+        anyhow::ensure!(norm > 1e-9, "degenerate embedding");
+        for v in emb.iter_mut() {
+            *v /= norm;
+        }
+        Ok(emb)
+    }
 }
 
 /// Routing role of one schema/text token while assembling the prompt.

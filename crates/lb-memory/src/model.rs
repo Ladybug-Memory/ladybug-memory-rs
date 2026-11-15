@@ -9,7 +9,12 @@ pub const DEFAULT_LABELS: &[&str] =
     &["person", "organization", "location", "product", "event", "date", "technology", "concept"];
 
 pub trait Extractor {
-    fn extract(&mut self, text: &str, threshold: f32) -> Result<Vec<ScoredMention>>;
+    fn extract(
+        &mut self,
+        text: &str,
+        labels: &[String],
+        threshold: f32,
+    ) -> Result<Vec<ScoredMention>>;
     /// Classify `text` into `labels` (single-label argmax semantics).
     /// Returns `(label, probability)` in input order; empty means
     /// "no model verdict" (rule-based callers keep their answer).
@@ -28,6 +33,12 @@ pub trait Extractor {
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         Ok(vec![])
     }
+    /// Sentence embedding for vector search (L2-normalized). `None` means
+    /// "no embedder" — callers keep lexical behavior. Used to shortlist
+    /// canonical-relation candidates from the SQLite inventory.
+    fn embed(&mut self, _text: &str) -> Result<Option<Vec<f32>>> {
+        Ok(None)
+    }
 }
 
 /// Lazy GLiNER2.5 extractor: sessions load on first `extract`, never for
@@ -44,13 +55,17 @@ impl GlinerExtractor {
 }
 
 impl Extractor for GlinerExtractor {
-    fn extract(&mut self, text: &str, threshold: f32) -> Result<Vec<ScoredMention>> {
+    fn extract(
+        &mut self,
+        text: &str,
+        labels: &[String],
+        threshold: f32,
+    ) -> Result<Vec<ScoredMention>> {
         if self.model.is_none() {
             self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
         }
         let model = self.model.as_mut().expect("just loaded");
-        let labels: Vec<String> = DEFAULT_LABELS.iter().map(|s| s.to_string()).collect();
-        let out = model.extract(text, &labels, threshold)?;
+        let out = model.extract(text, labels, threshold)?;
         Ok(out
             .mentions
             .into_iter()
@@ -97,8 +112,8 @@ impl Extractor for GlinerExtractor {
                 relation_type: r.relation_type.clone(),
                 head_types: r.head_types.clone(),
                 tail_types: r.tail_types.clone(),
-                description: None,
-                allow_self: false,
+                description: r.description.clone(),
+                allow_self: r.allow_self,
             })
             .collect();
         // Clean extracted mentions become the scorer's pairs directly
@@ -126,6 +141,14 @@ impl Extractor for GlinerExtractor {
             })
             .collect())
     }
+
+    fn embed(&mut self, text: &str) -> Result<Option<Vec<f32>>> {
+        if self.model.is_none() {
+            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+        }
+        let model = self.model.as_mut().expect("just loaded");
+        Ok(Some(model.embed(text)?))
+    }
 }
 
 /// Deterministic fake for unit tests (no model, no dylib).
@@ -134,18 +157,25 @@ pub struct FakeExtractor {
     pub mentions: Vec<ScoredMention>,
     pub classify_scores: Vec<(String, f32)>,
     pub relations: Vec<crate::types::ScoredRelation>,
+    /// Stub embedding returned from `embed` (`None` = no embedder).
+    pub embed_vec: Option<Vec<f32>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl Default for FakeExtractor {
     fn default() -> Self {
-        Self { mentions: vec![], classify_scores: vec![], relations: vec![] }
+        Self { mentions: vec![], classify_scores: vec![], relations: vec![], embed_vec: None }
     }
 }
 
 #[cfg(any(test, feature = "test-support"))]
 impl Extractor for FakeExtractor {
-    fn extract(&mut self, _text: &str, _threshold: f32) -> Result<Vec<ScoredMention>> {
+    fn extract(
+        &mut self,
+        _text: &str,
+        _labels: &[String],
+        _threshold: f32,
+    ) -> Result<Vec<ScoredMention>> {
         Ok(self.mentions.clone())
     }
 
@@ -162,5 +192,9 @@ impl Extractor for FakeExtractor {
         _threshold: f32,
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         Ok(self.relations.clone())
+    }
+
+    fn embed(&mut self, _text: &str) -> Result<Option<Vec<f32>>> {
+        Ok(self.embed_vec.clone())
     }
 }

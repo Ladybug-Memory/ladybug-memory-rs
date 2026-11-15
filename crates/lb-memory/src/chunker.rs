@@ -161,6 +161,47 @@ pub fn split_sentences(text: &str) -> Vec<(String, usize, usize)> {
     out
 }
 
+/// Split one sentence into scoring clauses on `;`, keeping fact-relative
+/// char offsets. Long multi-clause sentences degrade the pair scorer the
+/// same way paragraphs do, so each clause is an independent scoring call
+/// (mentions are filtered to the clause span, exactly like sentences).
+/// Semicolons inside parentheses/brackets never split: they join
+/// appositives and date ranges ("(born X; April 22, 1904 – ...)"), not
+/// independent clauses. Sentences without top-level `;` come back whole.
+pub fn split_clauses(sent_text: &str, sent_start: usize) -> Vec<(String, usize, usize)> {
+    let chars: Vec<char> = sent_text.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let push = |s: usize, e: usize, out: &mut Vec<(String, usize, usize)>| {
+        // Trim edge whitespace; drop empties.
+        let mut a = s;
+        let mut b = e;
+        while a < b && chars[a].is_whitespace() {
+            a += 1;
+        }
+        while b > a && chars[b - 1].is_whitespace() {
+            b -= 1;
+        }
+        if b > a {
+            out.push((chars[a..b].iter().collect(), sent_start + a, sent_start + b));
+        }
+    };
+    for (i, c) in chars.iter().enumerate() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' if depth > 0 => depth -= 1,
+            ';' if depth == 0 => {
+                push(start, i, &mut out);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    push(start, chars.len(), &mut out);
+    out
+}
+
 fn split_sentence_groups(text: &str, base_offset: usize, max_unit_size: usize) -> Vec<LogicalUnit> {
     let mut units = Vec::new();
     let mut sentences: Vec<&str> = Vec::new();
@@ -233,7 +274,7 @@ mod tests {
 
 #[cfg(test)]
 mod split_tests {
-    use super::split_sentences;
+    use super::{split_clauses, split_sentences};
 
     fn texts(s: &str) -> Vec<String> {
         split_sentences(s).into_iter().map(|(t, _, _)| t).collect()
@@ -263,5 +304,35 @@ mod split_tests {
     fn normal_sentences_still_split() {
         let parts = texts("First sentence. Second here! Third?");
         assert_eq!(parts.len(), 3);
+    }
+
+    #[test]
+    fn parenthesized_semicolons_do_not_split() {
+        // The birth/death date appositive must stay one clause so its
+        // pairs still meet: naive splitting orphaned every Oppenheimer
+        // edge in the wild.
+        let text = "J. Robert Oppenheimer (born X; April 22, 1904) directed the lab.";
+        let clauses = split_clauses(text, 0);
+        assert_eq!(clauses.len(), 1);
+    }
+
+    #[test]
+    fn clauses_split_on_semicolons_with_offsets() {
+        let text = "He assembled top scientists at Los Alamos; resolved plutonium implosion challenges.";
+        let clauses = split_clauses(text, 10);
+        assert_eq!(clauses.len(), 2);
+        assert!(clauses[0].0.starts_with("He assembled"));
+        assert!(clauses[1].0.starts_with("resolved"));
+        // Fact-relative offsets index back into the original text.
+        assert_eq!(clauses[0].1, 10);
+        assert_eq!(&text[clauses[1].1 - 10..clauses[1].2 - 10], clauses[1].0);
+    }
+
+    #[test]
+    fn sentences_without_semicolons_come_back_whole() {
+        let text = "No semicolons here.";
+        let clauses = split_clauses(text, 0);
+        assert_eq!(clauses.len(), 1);
+        assert_eq!(clauses[0].0, text);
     }
 }
