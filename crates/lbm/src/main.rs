@@ -10,6 +10,7 @@
 //! lbm remember "User prefers Python for scripting" --scope project
 //! lbm remember "Fact" --via-sqlite    # sqlite-first: intake -> GLiNER -> stage -> sync
 //! lbm sync                             # drain any pending sqlite intake (crash recovery)
+//! lbm fetch-model                      # first-run setup: download the GLiNER snapshot (~780 MB)
 //! lbm demo [--db PATH] [--snapshot PATH]  # GPUI demo: chat left, live graph right
 //! lbm search "python" --json
 //! lbm forget "python"            # lists matches; --apply deletes
@@ -60,6 +61,10 @@ enum Commands {
     Remember(RememberArgs),
     /// Drain any pending SQLite intake into the graph (crash recovery).
     Sync(SyncArgs),
+    /// Download the GLiNER model snapshot (first-run setup).
+    /// Also fetched automatically on the first `remember`/`demo` that
+    /// needs it; this subcommand just pre-warms without running inference.
+    FetchModel(FetchModelArgs),
     /// Open the GPUI demo: chat on the left, live entity graph on the right.
     Demo(DemoArgs),
     /// Recall matching facts and entities by topic.
@@ -224,6 +229,13 @@ struct SyncArgs {
 }
 
 #[derive(clap::Args)]
+struct FetchModelArgs {
+    /// Path to the GLiNER model snapshot (default LB_MEMORY_SNAPSHOT, else cache).
+    #[arg(long, value_name = "PATH")]
+    snapshot: Option<String>,
+}
+
+#[derive(clap::Args)]
 struct DemoArgs {
     /// Path to the GLiNER model snapshot (default LB_MEMORY_SNAPSHOT, else cache).
     #[arg(long, value_name = "PATH")]
@@ -382,6 +394,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Remember(a) => cmd_remember(a, db, out),
         Commands::Sync(a) => cmd_sync(a, db, out),
+        Commands::FetchModel(a) => cmd_fetch_model(a, out),
         Commands::Demo(a) => cmd_demo(a, db),
         Commands::Search(a) => cmd_search(a, db, out),
         Commands::Forget(a) => cmd_forget(a, db, out),
@@ -561,6 +574,21 @@ fn print_report(r: &lb_memory::types::RememberReport) {
         ),
         None => println!("stored: nothing"),
     }
+}
+
+/// Download the GLiNER snapshot without running inference (first-run
+/// setup / pre-warm). Inference commands (`remember`, `demo`) fetch
+/// automatically on first use; this is the explicit, scriptable form.
+fn cmd_fetch_model(args: FetchModelArgs, out: Out) -> Result<()> {
+    let snapshot = args.snapshot.unwrap_or_else(default_snapshot);
+    let extractor = GlinerExtractor::new(snapshot.clone());
+    extractor.ensure_model()?;
+    if out.json {
+        print_json(&serde_json::json!({ "snapshot": snapshot, "ready": true }), out);
+        return Ok(());
+    }
+    println!("model ready at {snapshot}");
+    Ok(())
 }
 
 /// Drain any pending SQLite intake into the graph (crash recovery,
@@ -773,6 +801,10 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
         Ok(db) => (db.path().to_string(), db.pending_count().unwrap_or(0)),
         Err(_) => ("-".to_string(), 0),
     };
+    // Model snapshot: a fresh machine has no snapshot until the first
+    // `remember`/`demo` (auto-fetch) or an explicit `fetch-model`.
+    let model_path = std::env::var("LB_MEMORY_SNAPSHOT").unwrap_or_else(|_| default_snapshot());
+    let model_ready = lb_memory::fetch::is_loadable(std::path::Path::new(&model_path));
     if out.json {
         print_json(
             &serde_json::json!({
@@ -780,6 +812,7 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
                 "mentions": men, "needs_review": rev,
                 "labels": DEFAULT_LABELS_NOTE,
                 "intake": intake_path, "intake_pending": pending,
+                "model": model_path, "model_ready": model_ready,
             }),
             out,
         );
@@ -788,6 +821,10 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
     println!("db: {path}");
     println!("memories: {mem}, entities: {ent}, mentions: {men}, needs_review: {rev}");
     println!("intake: {intake_path} (pending: {pending})");
+    println!(
+        "model: {model_path} ({})",
+        if model_ready { "ready" } else { "missing — run `lbm fetch-model`" }
+    );
     Ok(())
 }
 
