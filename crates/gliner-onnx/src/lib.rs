@@ -39,6 +39,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use ort::environment::Environment;
+pub mod fetch;
 use ort::value::Tensor;
 use ort::session::Session;
 use regex::Regex;
@@ -233,10 +234,36 @@ impl GlinerOnnx {
     /// Nicolasembleton single-graph export; otherwise the DanKau 3-graph
     /// split (`encoder`/`boundary`/`classifier`) is expected.
     ///
+    /// Fails when the directory is incomplete — use [`Self::load_or_fetch`]
+    /// for first-run downloads. The hint names the missing files so a new
+    /// user knows exactly what to fetch.
+    ///
     /// The ONNX Runtime dylib resolves via `ORT_DYLIB_PATH`, or
     /// `GLINER_ORT_DYLIB` to override without touching the shared variable.
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
+        let dir = dir.as_ref();
+        if !fetch::is_loadable(dir) {
+            let missing = fetch::missing_files(dir);
+            return Err(anyhow!(
+                "model snapshot incomplete at {} (missing: {}); run `lbm fetch-model` \
+                 or set LB_MEMORY_SNAPSHOT to a downloaded snapshot",
+                dir.display(),
+                missing.join(", ")
+            ));
+        }
+        Self::load_complete(dir.to_path_buf())
+    }
+
+    /// Fetch any missing snapshot files (see [`fetch::ensure_model`]) and
+    /// then [`Self::load`]. This is the entry point CLIs should use so a
+    /// fresh machine downloads the ~780 MB export once, on first inference.
+    pub fn load_or_fetch(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
+        fetch::ensure_model(&dir)?;
+        Self::load_complete(dir)
+    }
+
+    fn load_complete(dir: PathBuf) -> Result<Self> {
         let dylib = std::env::var("GLINER_ORT_DYLIB")
             .or_else(|_| std::env::var("ORT_DYLIB_PATH"))
             .map_err(|_| anyhow!("set ORT_DYLIB_PATH to libonnxruntime (see README)"))?;
