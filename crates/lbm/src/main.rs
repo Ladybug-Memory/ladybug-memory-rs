@@ -1,5 +1,8 @@
 //! `lbm` — the CLI pi extensions shell out to.
 //!
+//! Memory-only surface: distilled facts plus the entity graph. (The
+//! database shell lives in a separate binary.)
+//!
 //! Human-readable text by default; `--json` for machine consumption.
 //! Exit code is nonzero only on operational failure (not on empty results).
 //!
@@ -13,67 +16,225 @@
 //! lbm tour --json
 //! lbm status
 //! lbm review                     # lists needs_review + quarantined
-//! lbm review --accept 3 --supersede 1
 //! echo "text" | lbm remember --auto   # auto-capture path (distills facts)
 //! ```
 
-use std::collections::HashMap;
+use std::io::IsTerminal;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
+use clap::{Parser, Subcommand, ValueEnum};
 use lb_memory::model::GlinerExtractor;
 use lb_memory::pipeline::{Pipeline, PipelineOptions};
 use lb_memory::store::Store;
 use lb_memory::types::{Provenance, Scope};
 
-const DEFAULT_LABELS_NOTE: &str = "person,organization,location,product,event,date,technology,concept";
+const DEFAULT_LABELS_NOTE: &str = "person,organization,location,product,event,technology,concept";
 
-#[derive(Default)]
-struct Args {
-    positional: Vec<String>,
-    flags: HashMap<String, String>,
-    bools: Vec<String>,
+/// Pi-agent long-term memory over LadybugDB: distilled facts plus an entity
+/// graph. Human text by default, `--json` for machines.
+#[derive(Parser)]
+#[command(name = "lbm", version, about, arg_required_else_help = true)]
+struct Cli {
+    /// Path to the memory database. Defaults to LB_MEMORY_DB,
+    /// else ~/.pi/agent/lb-memory/memory.lbdb (demo: demo.lbdb).
+    #[arg(long, value_name = "PATH", global = true, env = "LB_MEMORY_DB")]
+    db: Option<String>,
+
+    /// Machine consumption: one JSON object per command on stdout.
+    /// Pretty-printed on a terminal, compact when piped (see --pretty).
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Indent JSON output even when stdout is not a terminal.
+    #[arg(long, global = true)]
+    pretty: bool,
+
+    #[command(subcommand)]
+    command: Commands,
 }
 
-fn parse_args(raw: &[String]) -> Args {
-    let mut out = Args::default();
-    let mut i = 0;
-    while i < raw.len() {
-        let a = &raw[i];
-        if let Some(name) = a.strip_prefix("--") {
-            if let Some((k, v)) = name.split_once('=') {
-                out.flags.insert(k.to_string(), v.to_string());
-            } else if i + 1 < raw.len() && !raw[i + 1].starts_with("--") {
-                // --key value, unless the flag is a known boolean.
-                if is_bool_flag(name) {
-                    out.bools.push(name.to_string());
-                } else {
-                    out.flags.insert(name.to_string(), raw[i + 1].clone());
-                    i += 1;
-                }
-            } else {
-                out.bools.push(name.to_string());
-            }
-        } else {
-            out.positional.push(a.clone());
-        }
-        i += 1;
-    }
-    out
+#[derive(Subcommand)]
+enum Commands {
+    /// Store a fact (GLiNER extraction, dedup, conflict gating included).
+    /// TEXT may be given as positionals or piped on stdin.
+    Remember(RememberArgs),
+    /// Drain any pending SQLite intake into the graph (crash recovery).
+    Sync(SyncArgs),
+    /// Open the GPUI demo: chat on the left, live entity graph on the right.
+    Demo(DemoArgs),
+    /// Recall matching facts and entities by topic.
+    Search(SearchArgs),
+    /// List memories matching a query; --apply deletes them.
+    Forget(ForgetArgs),
+    /// Browse stored memories by category.
+    Tour(TourArgs),
+    /// Counts, database path, and pending intake.
+    Status(StatusArgs),
+    /// List the needs_review + quarantined queue, or adjudicate one entry.
+    Review(ReviewArgs),
 }
 
-fn is_bool_flag(name: &str) -> bool {
-    // NB: accept/drop take values (--accept <id>); listing them here would
-    // swallow the id into positionals.
-    matches!(name, "json" | "auto" | "apply" | "verbose" | "include-review" | "via-sqlite")
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ScopeArg {
+    Project,
+    Session,
+    Global,
 }
 
-impl Args {
-    fn bool(&self, name: &str) -> bool {
-        self.bools.iter().any(|b| b == name)
-    }
-    fn str(&self, name: &str) -> Option<&str> {
-        self.flags.get(name).map(|s| s.as_str())
-    }
+#[derive(clap::Args)]
+struct RememberArgs {
+    /// Fact text (joined with spaces). Empty reads stdin instead.
+    #[arg(value_name = "TEXT")]
+    text: Vec<String>,
+
+    /// Memory scope (default project).
+    #[arg(long, value_enum, default_value = "project")]
+    scope: ScopeArg,
+    /// Session id (session scope needs --session or PI_SESSION_ID).
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// User id (default LB_MEMORY_USER, else USER, else "default").
+    #[arg(long, value_name = "USER")]
+    user: Option<String>,
+    /// Project slug (default: git root basename, else cwd slug).
+    #[arg(long, value_name = "SLUG")]
+    project: Option<String>,
+    /// Path to the GLiNER model snapshot (default LB_MEMORY_SNAPSHOT, else cache).
+    #[arg(long, value_name = "PATH")]
+    snapshot: Option<String>,
+    /// Extraction confidence threshold.
+    #[arg(long, default_value_t = 0.7)]
+    threshold: f32,
+    /// Optional importance override for the stored fact.
+    #[arg(long, value_name = "INT")]
+    importance: Option<i64>,
+    /// Provenance refs, comma-separated (opaque "<role>:<hash>" ids).
+    #[arg(long, value_name = "REFS")]
+    message_ref: Option<String>,
+    /// SQLite-first intake: intake -> GLiNER -> stage -> sync tick.
+    #[arg(long)]
+    via_sqlite: bool,
+    /// Intake file override (default: <stem>.intake.sqlite sibling of the db).
+    #[arg(long, value_name = "PATH")]
+    sqlite_path: Option<String>,
+    /// Local extension build override for the sync tick.
+    #[arg(long, value_name = "PATH")]
+    extension: Option<String>,
+    /// Auto-capture path: distill per-sentence facts, drop entity-less ones.
+    #[arg(long)]
+    auto: bool,
+}
+
+#[derive(clap::Args)]
+struct SearchArgs {
+    /// Query text (joined with spaces). Empty reads stdin instead.
+    #[arg(value_name = "QUERY")]
+    query: Vec<String>,
+
+    /// Memory scope (default project).
+    #[arg(long, value_enum, default_value = "project")]
+    scope: ScopeArg,
+    /// Session id (session scope needs --session or PI_SESSION_ID).
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// User id (default LB_MEMORY_USER, else USER, else "default").
+    #[arg(long, value_name = "USER")]
+    user: Option<String>,
+    /// Project slug (default: git root basename, else cwd slug).
+    #[arg(long, value_name = "SLUG")]
+    project: Option<String>,
+    /// Max hits to print.
+    #[arg(long, default_value_t = 10)]
+    limit: usize,
+}
+
+#[derive(clap::Args)]
+struct ForgetArgs {
+    /// Query text (joined with spaces). Empty reads stdin instead.
+    #[arg(value_name = "QUERY")]
+    query: Vec<String>,
+
+    /// Memory scope (default project).
+    #[arg(long, value_enum, default_value = "project")]
+    scope: ScopeArg,
+    /// Session id (session scope needs --session or PI_SESSION_ID).
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// User id (default LB_MEMORY_USER, else USER, else "default").
+    #[arg(long, value_name = "USER")]
+    user: Option<String>,
+    /// Project slug (default: git root basename, else cwd slug).
+    #[arg(long, value_name = "SLUG")]
+    project: Option<String>,
+    /// Max matches to consider.
+    #[arg(long, default_value_t = 10)]
+    limit: usize,
+    /// Actually delete the matches (default: list only).
+    #[arg(long)]
+    apply: bool,
+}
+
+#[derive(clap::Args)]
+struct TourArgs {
+    /// Memory scope (default project).
+    #[arg(long, value_enum, default_value = "project")]
+    scope: ScopeArg,
+    /// Session id (session scope needs --session or PI_SESSION_ID).
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// User id (default LB_MEMORY_USER, else USER, else "default").
+    #[arg(long, value_name = "USER")]
+    user: Option<String>,
+    /// Project slug (default: git root basename, else cwd slug).
+    #[arg(long, value_name = "SLUG")]
+    project: Option<String>,
+    /// Max entries to list.
+    #[arg(long, default_value_t = 100)]
+    limit: usize,
+}
+
+#[derive(clap::Args)]
+struct ReviewArgs {
+    /// Accept a queued entry back to active.
+    #[arg(long, value_name = "ID")]
+    accept: Option<i64>,
+    /// When accepting, retire this older entry it supersedes.
+    #[arg(long, value_name = "ID")]
+    supersede: Option<i64>,
+    /// Discard a queued entry.
+    #[arg(long, value_name = "ID")]
+    drop: Option<i64>,
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+}
+
+#[derive(clap::Args)]
+struct StatusArgs {
+    /// Intake file override (default: <stem>.intake.sqlite sibling of the db).
+    #[arg(long, value_name = "PATH")]
+    sqlite_path: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct SyncArgs {
+    #[arg(long, value_name = "PATH")]
+    sqlite_path: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    extension: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct DemoArgs {
+    /// Path to the GLiNER model snapshot (default LB_MEMORY_SNAPSHOT, else cache).
+    #[arg(long, value_name = "PATH")]
+    snapshot: Option<String>,
+}
+
+/// Output flags threaded through every command.
+#[derive(Clone, Copy)]
+struct Out {
+    json: bool,
+    pretty: bool,
 }
 
 fn home() -> String {
@@ -94,9 +255,8 @@ fn default_snapshot() -> String {
     })
 }
 
-fn user_id(args: &Args) -> String {
-    args.str("user")
-        .map(str::to_string)
+fn user_id(arg: Option<&str>) -> String {
+    arg.map(str::to_string)
         .or_else(|| std::env::var("LB_MEMORY_USER").ok())
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "default".into())
@@ -108,11 +268,17 @@ fn project_slug() -> String {
     if let Ok(root) = git_root() {
         return slug(&root);
     }
-    slug(&std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| "default".into()))
+    slug(
+        &std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".into()),
+    )
 }
 
 fn git_root() -> Result<String> {
-    let out = std::process::Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
     if !out.status.success() {
         return Err(anyhow!("not a git repo"));
     }
@@ -123,7 +289,13 @@ fn slug(s: &str) -> String {
     let base = s.rsplit('/').next().unwrap_or(s);
     let slug: String = base
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     let slug = slug.trim_matches('-').to_string();
     if slug.is_empty() {
@@ -133,29 +305,39 @@ fn slug(s: &str) -> String {
     }
 }
 
-fn resolve_scope(args: &Args) -> Result<(Scope, ScopeMode)> {
-    let mode = match args.str("scope").unwrap_or("project") {
-        "session" => ScopeMode::Session,
-        "global" => ScopeMode::Global,
-        _ => ScopeMode::Project,
+fn resolve_scope(
+    scope: ScopeArg,
+    session: Option<&str>,
+    user: Option<&str>,
+    project: Option<&str>,
+) -> Result<(Scope, ScopeMode)> {
+    let mode = match scope {
+        ScopeArg::Session => ScopeMode::Session,
+        ScopeArg::Global => ScopeMode::Global,
+        ScopeArg::Project => ScopeMode::Project,
     };
-    let session = args
-        .str("session")
+    let session_id = session
         .map(str::to_string)
         .or_else(|| std::env::var("LB_MEMORY_SESSION").ok())
         .or_else(|| std::env::var("PI_SESSION_ID").ok());
-    if mode == ScopeMode::Session && session.is_none() {
-        return Err(anyhow!("--scope session needs --session <id> or PI_SESSION_ID"));
+    if mode == ScopeMode::Session && session_id.is_none() {
+        return Err(anyhow!(
+            "--scope session needs --session <id> or PI_SESSION_ID"
+        ));
     }
     Ok((
         Scope {
-            user_id: user_id(args),
-            project: args.str("project").map(str::to_string).unwrap_or_else(project_slug),
+            user_id: user_id(user),
+            project: project.map(str::to_string).unwrap_or_else(project_slug),
             // Session filters recall only in session scope (mem0 semantics:
             // project = user+project). It is still *recorded* in provenance.
             // NB: PI_SESSION_ID is set inside agent shells — never let it
             // leak into project/global recall or everything misses.
-            session_id: if mode == ScopeMode::Session { session } else { None },
+            session_id: if mode == ScopeMode::Session {
+                session_id
+            } else {
+                None
+            },
         },
         mode,
     ))
@@ -168,9 +350,9 @@ enum ScopeMode {
     Global,
 }
 
-fn read_text(args: &Args) -> Result<String> {
-    if !args.positional.is_empty() {
-        return Ok(args.positional.join(" "));
+fn read_text(parts: &[String]) -> Result<String> {
+    if !parts.is_empty() {
+        return Ok(parts.join(" "));
     }
     // Piped stdin (auto-capture path).
     use std::io::Read;
@@ -179,125 +361,160 @@ fn read_text(args: &Args) -> Result<String> {
     Ok(buf.trim().to_string())
 }
 
-fn print_json(v: &serde_json::Value) {
-    println!("{}", serde_json::to_string_pretty(v).unwrap());
+/// JSON output: indented on a terminal, compact when piped; `--pretty`
+/// forces indentation either way.
+fn print_json(v: &serde_json::Value, out: Out) {
+    if out.pretty || std::io::stdout().is_terminal() {
+        println!("{}", serde_json::to_string_pretty(v).unwrap());
+    } else {
+        println!("{}", serde_json::to_string(v).unwrap());
+    }
 }
 
 fn main() -> Result<()> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.is_empty() {
-        eprintln!("usage: lbm <remember|sync|search|forget|tour|status|review|demo> [--json] ...");
-        std::process::exit(2);
-    }
-    let cmd = raw[0].clone();
-    let args = parse_args(&raw[1..]);
-    match cmd.as_str() {
-        "remember" => cmd_remember(args),
-        "sync" => cmd_sync(args),
-        "demo" => cmd_demo(args),
-        "search" => cmd_search(args),
-        "forget" => cmd_forget(args),
-        "tour" => cmd_tour(args),
-        "status" => cmd_status(args),
-        "review" => cmd_review(args),
-        _ => Err(anyhow!("unknown command {cmd} (see module docs)")),
+    let cli = Cli::parse();
+    let out = Out {
+        json: cli.json,
+        pretty: cli.pretty,
+    };
+    // `--db` is global: `lbm --db P <cmd>` and `lbm <cmd> --db P` agree.
+    let db = cli.db.clone();
+    match cli.command {
+        Commands::Remember(a) => cmd_remember(a, db, out),
+        Commands::Sync(a) => cmd_sync(a, db, out),
+        Commands::Demo(a) => cmd_demo(a, db),
+        Commands::Search(a) => cmd_search(a, db, out),
+        Commands::Forget(a) => cmd_forget(a, db, out),
+        Commands::Tour(a) => cmd_tour(a, db, out),
+        Commands::Status(a) => cmd_status(a, db, out),
+        Commands::Review(a) => cmd_review(a, db, out),
     }
 }
 
-fn open_store(args: &Args) -> Result<Store> {
-    let path = args.str("db").map(str::to_string).unwrap_or_else(default_db);
+fn open_store(db: Option<String>) -> Result<Store> {
+    let path = db.unwrap_or_else(default_db);
     Store::open(&path).with_context(|| format!("opening {path}"))
 }
 
 /// GPUI demo: chat with the agent on the left, watch the entity graph
 /// update on the right (graph view only — no treemap/sunburst).
-fn cmd_demo(args: Args) -> Result<()> {
-    let db = args.str("db").map(str::to_string).unwrap_or_else(demo::default_db);
-    let snapshot =
-        args.str("snapshot").map(str::to_string).unwrap_or_else(demo::default_snapshot);
-    demo::run(demo::DemoConfig { db_path: db, snapshot })
+fn cmd_demo(args: DemoArgs, db: Option<String>) -> Result<()> {
+    // The demo keeps its own default database; an explicit --db overrides it.
+    let db_path = db.unwrap_or_else(demo::default_db);
+    let snapshot = args.snapshot.unwrap_or_else(default_snapshot);
+    demo::run(demo::DemoConfig { db_path, snapshot })
 }
 
-fn open_intake(args: &Args, store: &Store) -> Result<lb_memory::sqlite_sync::IntakeDb> {
-    if let Some(p) = args.str("sqlite-path") {
-        lb_memory::sqlite_sync::IntakeDb::open(p).with_context(|| format!("opening {p}"))
+fn open_intake(
+    store: &Store,
+    sqlite_path: Option<String>,
+) -> Result<lb_memory::sqlite_sync::IntakeDb> {
+    if let Some(p) = sqlite_path {
+        lb_memory::sqlite_sync::IntakeDb::open(&p).with_context(|| format!("opening {p}"))
     } else {
         store.intake_db()
     }
 }
 
-fn cmd_remember(args: Args) -> Result<()> {
-    let text = read_text(&args)?;
+fn cmd_remember(args: RememberArgs, db: Option<String>, out: Out) -> Result<()> {
+    let text = read_text(&args.text)?;
     if text.trim().is_empty() {
         return Err(anyhow!("nothing to remember (empty text)"));
     }
-    let (scope, _mode) = resolve_scope(&args)?;
-    let store = open_store(&args)?;
+    let (scope, _mode) = resolve_scope(
+        args.scope,
+        args.session.as_deref(),
+        args.user.as_deref(),
+        args.project.as_deref(),
+    )?;
+    let store = open_store(db)?;
     let pipe = Pipeline::new(
         &store,
         PipelineOptions {
-            extract_threshold: args.str("threshold").and_then(|s| s.parse().ok()).unwrap_or(0.7),
+            extract_threshold: args.threshold,
             ..Default::default()
         },
     );
-    let mut extractor = GlinerExtractor::new(args.str("snapshot").map(str::to_string).unwrap_or_else(default_snapshot));
+    let mut extractor = GlinerExtractor::new(args.snapshot.unwrap_or_else(default_snapshot));
     let mut prov = Provenance {
         // Record the session for provenance even when it isn't a recall
         // filter (project/global modes): explicit flag wins, then env.
         session_id: args
-            .str("session")
-            .map(str::to_string)
+            .session
+            .clone()
             .or_else(|| std::env::var("LB_MEMORY_SESSION").ok())
             .or_else(|| std::env::var("PI_SESSION_ID").ok()),
         message_refs: args
-            .str("message-ref")
-            .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+            .message_ref
+            .as_deref()
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
             .unwrap_or_default(),
         extractor: "gliner2.5".into(),
         model: "DanKau/gliner2.5-base-v1-onnx".into(),
         auto_captured: false,
     };
-    let importance = args.str("importance").and_then(|s| s.parse().ok());
     // SQLite-first: intake -> GLiNER -> stage -> sync tick. The tick uses
     // the `sqlite` extension via INSTALL + LOAD (`--extension <path>`
     // overrides with a local build), falling back to the embedded applier.
-    if args.bool("via-sqlite") {
-        let intake = open_intake(&args, &store)?;
-        let ext = match args.str("extension") {
+    if args.via_sqlite {
+        let intake = open_intake(&store, args.sqlite_path)?;
+        let ext = match args.extension.as_deref() {
             Some(p) => Some(lb_memory::sqlite_sync::ExtensionSource::File(p)),
             None => Some(lb_memory::sqlite_sync::ExtensionSource::Repo),
         };
-        let (reports, stats) = if args.bool("auto") {
+        let (reports, stats) = if args.auto {
             prov.auto_captured = true;
             pipe.remember_auto_via_sqlite(&mut extractor, &intake, &text, &scope, prov, ext)?
         } else {
-            pipe.remember_via_sqlite(&mut extractor, &intake, &text, &scope, importance, prov, ext)?
+            pipe.remember_via_sqlite(
+                &mut extractor,
+                &intake,
+                &text,
+                &scope,
+                args.importance,
+                prov,
+                ext,
+            )?
         };
-        if args.bool("json") {
-            print_json(&serde_json::json!({
-                "reports": reports,
-                "sync": { "via": stats.via, "applied_intake": stats.applied_intake,
-                          "rows_upserted": stats.rows_upserted, "status": stats.status },
-                "intake": intake.path(),
-            }));
+        if out.json {
+            print_json(
+                &serde_json::json!({
+                    "reports": reports,
+                    "sync": { "via": stats.via, "applied_intake": stats.applied_intake,
+                              "rows_upserted": stats.rows_upserted, "status": stats.status },
+                    "intake": intake.path(),
+                }),
+                out,
+            );
             return Ok(());
         }
         for r in &reports {
             print_report(r);
         }
-        println!("sync via {}: applied {} intake, {} rows upserted ({}) [{}]",
-            stats.via, stats.applied_intake, stats.rows_upserted, stats.status, intake.path());
+        println!(
+            "sync via {}: applied {} intake, {} rows upserted ({}) [{}]",
+            stats.via,
+            stats.applied_intake,
+            stats.rows_upserted,
+            stats.status,
+            intake.path()
+        );
         return Ok(());
     }
-    let reports = if args.bool("auto") {
+    let reports = if args.auto {
         prov.auto_captured = true;
         pipe.remember_auto(&mut extractor, &text, &scope, prov)?
     } else {
-        pipe.remember(&mut extractor, &text, &scope, importance, prov)?
+        pipe.remember(&mut extractor, &text, &scope, args.importance, prov)?
     };
 
-    if args.bool("json") {
-        print_json(&serde_json::json!({ "reports": reports }));
+    if out.json {
+        print_json(&serde_json::json!({ "reports": reports }), out);
         return Ok(());
     }
     for r in &reports {
@@ -307,73 +524,95 @@ fn cmd_remember(args: Args) -> Result<()> {
 }
 
 fn print_report(r: &lb_memory::types::RememberReport) {
-        let step1: Vec<String> =
-            r.extracted.iter().map(|m| format!("{}[{:.2}]", m.text, m.confidence)).collect();
-        println!("extract: {}", step1.join(", "));
-        let step3: Vec<String> = r
-            .resolved
-            .iter()
-            .map(|e| format!("{}{}", e.canonical, if e.created { " (new)" } else { "" }))
-            .collect();
-        println!("resolve: {}", step3.join(", "));
-        match &r.decision {
-            lb_memory::types::FactDecision::New { .. } => println!("decision: new"),
-            lb_memory::types::FactDecision::Duplicate { of, similarity } => {
-                println!("decision: duplicate of #{of} (sim {similarity:.2}) — strengthened")
-            }
-            lb_memory::types::FactDecision::Conflict { with, cues } => {
-                println!("decision: conflict with {with:?} [{}] — needs review", cues.join("; "))
-            }
-            lb_memory::types::FactDecision::LowConfidence { reason } => {
-                println!("decision: low confidence ({reason}) — quarantined")
-            }
+    let step1: Vec<String> = r
+        .extracted
+        .iter()
+        .map(|m| format!("{}[{:.2}]", m.text, m.confidence))
+        .collect();
+    println!("extract: {}", step1.join(", "));
+    let step3: Vec<String> = r
+        .resolved
+        .iter()
+        .map(|e| format!("{}{}", e.canonical, if e.created { " (new)" } else { "" }))
+        .collect();
+    println!("resolve: {}", step3.join(", "));
+    match &r.decision {
+        lb_memory::types::FactDecision::New { .. } => println!("decision: new"),
+        lb_memory::types::FactDecision::Duplicate { of, similarity } => {
+            println!("decision: duplicate of #{of} (sim {similarity:.2}) — strengthened")
         }
-        match &r.written {
-            Some(w) => println!("stored #{} [{}|{}]: {}", w.id, w.category.as_str(), w.status.as_str(), w.content),
-            None => println!("stored: nothing"),
+        lb_memory::types::FactDecision::Conflict { with, cues } => {
+            println!(
+                "decision: conflict with {with:?} [{}] — needs review",
+                cues.join("; ")
+            )
         }
+        lb_memory::types::FactDecision::LowConfidence { reason } => {
+            println!("decision: low confidence ({reason}) — quarantined")
+        }
+    }
+    match &r.written {
+        Some(w) => println!(
+            "stored #{} [{}|{}]: {}",
+            w.id,
+            w.category.as_str(),
+            w.status.as_str(),
+            w.content
+        ),
+        None => println!("stored: nothing"),
+    }
 }
 
 /// Drain any pending SQLite intake into the graph (crash recovery,
 /// daemon-less tick). Uses the `sqlite` extension via INSTALL + LOAD
 /// (`--extension <path>` overrides with a local build), falling back to the
 /// embedded applier on any engine error.
-fn cmd_sync(args: Args) -> Result<()> {
-    let store = open_store(&args)?;
-    let intake = open_intake(&args, &store)?;
+fn cmd_sync(args: SyncArgs, db: Option<String>, out: Out) -> Result<()> {
+    let store = open_store(db)?;
+    let intake = open_intake(&store, args.sqlite_path)?;
     let pipe = Pipeline::new(&store, PipelineOptions::default());
-    let ext = match args.str("extension") {
+    let ext = match args.extension.as_deref() {
         Some(p) => Some(lb_memory::sqlite_sync::ExtensionSource::File(p)),
         None => Some(lb_memory::sqlite_sync::ExtensionSource::Repo),
     };
     let stats = pipe.sync_intake(&intake, ext)?;
-    if args.bool("json") {
-        print_json(&serde_json::json!({
-            "intake": intake.path(),
-            "via": stats.via, "applied_intake": stats.applied_intake,
-            "rows_upserted": stats.rows_upserted, "status": stats.status,
-        }));
+    if out.json {
+        print_json(
+            &serde_json::json!({
+                "intake": intake.path(),
+                "via": stats.via, "applied_intake": stats.applied_intake,
+                "rows_upserted": stats.rows_upserted, "status": stats.status,
+            }),
+            out,
+        );
         return Ok(());
     }
     println!("intake: {}", intake.path());
-    println!("sync via {}: applied {} intake, {} rows upserted ({})",
-        stats.via, stats.applied_intake, stats.rows_upserted, stats.status);
+    println!(
+        "sync via {}: applied {} intake, {} rows upserted ({})",
+        stats.via, stats.applied_intake, stats.rows_upserted, stats.status
+    );
     Ok(())
 }
 
-fn cmd_search(args: Args) -> Result<()> {
-    let query = read_text(&args)?;
-    let (scope, mode) = resolve_scope(&args)?;
-    let store = open_store(&args)?;
-    let limit: usize = args.str("limit").and_then(|s| s.parse().ok()).unwrap_or(10);
+fn cmd_search(args: SearchArgs, db: Option<String>, out: Out) -> Result<()> {
+    let query = read_text(&args.query)?;
+    let (scope, mode) = resolve_scope(
+        args.scope,
+        args.session.as_deref(),
+        args.user.as_deref(),
+        args.project.as_deref(),
+    )?;
+    let store = open_store(db)?;
+    let limit = args.limit.max(1);
     // Global scope searches across projects.
     let hits = if mode == ScopeMode::Global {
         global_recall(&store, &query, &scope.user_id, limit)?
     } else {
         Pipeline::new(&store, PipelineOptions::default()).recall(&query, &scope, limit)?
     };
-    if args.bool("json") {
-        print_json(&serde_json::json!({ "hits": hits }));
+    if out.json {
+        print_json(&serde_json::json!({ "hits": hits }), out);
         return Ok(());
     }
     if hits.is_empty() {
@@ -381,7 +620,13 @@ fn cmd_search(args: Args) -> Result<()> {
         return Ok(());
     }
     for h in &hits {
-        println!("#{} [{:.2}] [{}] {}", h.entry.id, h.score, h.entry.category.as_str(), h.entry.content);
+        println!(
+            "#{} [{:.2}] [{}] {}",
+            h.entry.id,
+            h.score,
+            h.entry.category.as_str(),
+            h.entry.content
+        );
         if !h.entities.is_empty() {
             println!("    entities: {}", h.entities.join(", "));
         }
@@ -410,7 +655,12 @@ fn global_recall(
             if seen.insert(entry.id) {
                 let entities = vec![canonical.clone()];
                 let (boost, relations) = pipe.relations_for(&entities, query).unwrap_or_default();
-                hits.push(SearchHit { entry, score: conf as f32 + 0.1 + boost, entities, relations });
+                hits.push(SearchHit {
+                    entry,
+                    score: conf as f32 + 0.1 + boost,
+                    entities,
+                    relations,
+                });
             }
         }
     }
@@ -418,7 +668,12 @@ fn global_recall(
         if seen.insert(entry.id) {
             let entities = store.entities_for_memory(entry.id).unwrap_or_default();
             let (boost, relations) = pipe.relations_for(&entities, query).unwrap_or_default();
-            hits.push(SearchHit { entry, score: score as f32 + boost, entities, relations });
+            hits.push(SearchHit {
+                entry,
+                score: score as f32 + boost,
+                entities,
+                relations,
+            });
         }
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
@@ -426,31 +681,39 @@ fn global_recall(
     Ok(hits)
 }
 
-fn cmd_forget(args: Args) -> Result<()> {
-    let query = read_text(&args)?;
-    let (scope, mode) = resolve_scope(&args)?;
-    let store = open_store(&args)?;
-    let limit: usize = args.str("limit").and_then(|s| s.parse().ok()).unwrap_or(10);
+fn cmd_forget(args: ForgetArgs, db: Option<String>, out: Out) -> Result<()> {
+    let query = read_text(&args.query)?;
+    let (scope, mode) = resolve_scope(
+        args.scope,
+        args.session.as_deref(),
+        args.user.as_deref(),
+        args.project.as_deref(),
+    )?;
+    let store = open_store(db)?;
+    let limit = args.limit.max(1);
     let hits = if mode == ScopeMode::Global {
         global_recall(&store, &query, &scope.user_id, limit)?
     } else {
         Pipeline::new(&store, PipelineOptions::default()).recall(&query, &scope, limit)?
     };
-    if args.bool("apply") {
+    if args.apply {
         let mut deleted = 0;
         for h in &hits {
             store.delete_memory(h.entry.id)?;
             deleted += 1;
         }
-        if args.bool("json") {
-            print_json(&serde_json::json!({ "deleted": deleted }));
+        if out.json {
+            print_json(&serde_json::json!({ "deleted": deleted }), out);
         } else {
             println!("deleted {deleted} memories");
         }
         return Ok(());
     }
-    if args.bool("json") {
-        print_json(&serde_json::json!({ "matches": hits, "hint": "re-run with --apply to delete" }));
+    if out.json {
+        print_json(
+            &serde_json::json!({ "matches": hits, "hint": "re-run with --apply to delete" }),
+            out,
+        );
         return Ok(());
     }
     if hits.is_empty() {
@@ -458,22 +721,32 @@ fn cmd_forget(args: Args) -> Result<()> {
         return Ok(());
     }
     for h in &hits {
-        println!("#{} [{}] {}", h.entry.id, h.entry.category.as_str(), h.entry.content);
+        println!(
+            "#{} [{}] {}",
+            h.entry.id,
+            h.entry.category.as_str(),
+            h.entry.content
+        );
     }
     println!("re-run with --apply to delete these");
     Ok(())
 }
 
-fn cmd_tour(args: Args) -> Result<()> {
-    let (scope, mode) = resolve_scope(&args)?;
-    let store = open_store(&args)?;
-    let limit: usize = args.str("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
+fn cmd_tour(args: TourArgs, db: Option<String>, out: Out) -> Result<()> {
+    let (scope, mode) = resolve_scope(
+        args.scope,
+        args.session.as_deref(),
+        args.user.as_deref(),
+        args.project.as_deref(),
+    )?;
+    let store = open_store(db)?;
+    let limit = args.limit.max(1);
     let entries = match mode {
         ScopeMode::Global => store.list_global(&scope.user_id, limit)?,
         _ => Pipeline::new(&store, PipelineOptions::default()).tour(&scope, limit)?,
     };
-    if args.bool("json") {
-        print_json(&serde_json::json!({ "entries": entries }));
+    if out.json {
+        print_json(&serde_json::json!({ "entries": entries }), out);
         return Ok(());
     }
     let mut current = String::new();
@@ -490,23 +763,26 @@ fn cmd_tour(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn cmd_status(args: Args) -> Result<()> {
-    let store = open_store(&args)?;
+fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
+    let path = db.clone().unwrap_or_else(default_db);
+    let store = open_store(db)?;
     let (mem, ent, men, rev) = store.counts()?;
-    let path = args.str("db").map(str::to_string).unwrap_or_else(default_db);
     // SQLite intake (first-class write path): report pending work when the
     // intake file exists; missing file just means the direct path is in use.
-    let (intake_path, pending) = match open_intake(&args, &store) {
+    let (intake_path, pending) = match open_intake(&store, args.sqlite_path) {
         Ok(db) => (db.path().to_string(), db.pending_count().unwrap_or(0)),
         Err(_) => ("-".to_string(), 0),
     };
-    if args.bool("json") {
-        print_json(&serde_json::json!({
-            "db": path, "memories": mem, "entities": ent,
-            "mentions": men, "needs_review": rev,
-            "labels": DEFAULT_LABELS_NOTE,
-            "intake": intake_path, "intake_pending": pending,
-        }));
+    if out.json {
+        print_json(
+            &serde_json::json!({
+                "db": path, "memories": mem, "entities": ent,
+                "mentions": men, "needs_review": rev,
+                "labels": DEFAULT_LABELS_NOTE,
+                "intake": intake_path, "intake_pending": pending,
+            }),
+            out,
+        );
         return Ok(());
     }
     println!("db: {path}");
@@ -515,15 +791,14 @@ fn cmd_status(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn cmd_review(args: Args) -> Result<()> {
-    let store = open_store(&args)?;
-    if let Some(id) = args.str("accept").and_then(|s| s.parse::<i64>().ok()) {
-        let supersede = args.str("supersede").and_then(|s| s.parse::<i64>().ok());
+fn cmd_review(args: ReviewArgs, db: Option<String>, out: Out) -> Result<()> {
+    let store = open_store(db)?;
+    if let Some(id) = args.accept {
         let pipe = Pipeline::new(&store, PipelineOptions::default());
-        match pipe.review(id, true, supersede) {
+        match pipe.review(id, true, args.supersede) {
             Ok(entry) => {
-                if args.bool("json") {
-                    print_json(&serde_json::json!({ "accepted": entry }));
+                if out.json {
+                    print_json(&serde_json::json!({ "accepted": entry }), out);
                 } else {
                     println!("accepted #{}: {}", entry.id, entry.content);
                 }
@@ -532,18 +807,18 @@ fn cmd_review(args: Args) -> Result<()> {
             Err(e) => return Err(e),
         }
     }
-    if let Some(id) = args.str("drop").and_then(|s| s.parse::<i64>().ok()) {
+    if let Some(id) = args.drop {
         store.delete_memory(id)?;
-        if args.bool("json") {
-            print_json(&serde_json::json!({ "dropped": id }));
+        if out.json {
+            print_json(&serde_json::json!({ "dropped": id }), out);
         } else {
             println!("dropped #{id}");
         }
         return Ok(());
     }
-    let limit: usize = args.str("limit").and_then(|s| s.parse().ok()).unwrap_or(20);
+    let limit = args.limit.max(1);
     let queue = store.needs_review(limit)?;
-    if args.bool("json") {
+    if out.json {
         let items: Vec<serde_json::Value> = queue
             .iter()
             .map(|e| {
@@ -551,7 +826,7 @@ fn cmd_review(args: Args) -> Result<()> {
                 serde_json::json!({ "entry": e, "conflicts": conflicts })
             })
             .collect();
-        print_json(&serde_json::json!({ "queue": items }));
+        print_json(&serde_json::json!({ "queue": items }), out);
         return Ok(());
     }
     if queue.is_empty() {
@@ -559,7 +834,13 @@ fn cmd_review(args: Args) -> Result<()> {
         return Ok(());
     }
     for e in &queue {
-        println!("#{} [{}|{}] {}", e.id, e.category.as_str(), e.status.as_str(), e.content);
+        println!(
+            "#{} [{}|{}] {}",
+            e.id,
+            e.category.as_str(),
+            e.status.as_str(),
+            e.content
+        );
         for (other, cues) in store.conflicts_of(e.id).unwrap_or_default() {
             println!("    conflicts #{other}: {}", cues.join("; "));
         }
