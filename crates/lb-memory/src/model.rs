@@ -52,6 +52,19 @@ impl GlinerExtractor {
     pub fn new(snapshot: String) -> Self {
         Self { snapshot, model: None }
     }
+
+    /// Snapshot directory this extractor loads from.
+    pub fn snapshot_path(&self) -> &str {
+        &self.snapshot
+    }
+
+    /// Ensure the snapshot is on disk, downloading it on first run.
+    /// Inference entry points call this lazily via `load_or_fetch`; call
+    /// it explicitly to pre-warm (e.g. `lbm fetch-model`) without running
+    /// the model.
+    pub fn ensure_model(&self) -> Result<()> {
+        gliner_onnx::fetch::ensure_model(std::path::Path::new(&self.snapshot))
+    }
 }
 
 impl Extractor for GlinerExtractor {
@@ -62,7 +75,7 @@ impl Extractor for GlinerExtractor {
         threshold: f32,
     ) -> Result<Vec<ScoredMention>> {
         if self.model.is_none() {
-            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+            self.model = Some(gliner_onnx::GlinerOnnx::load_or_fetch(&self.snapshot)?);
         }
         let model = self.model.as_mut().expect("just loaded");
         let out = model.extract(text, labels, threshold)?;
@@ -83,7 +96,7 @@ impl Extractor for GlinerExtractor {
 
     fn classify(&mut self, text: &str, task: &str, labels: &[String]) -> Result<Vec<(String, f32)>> {
         if self.model.is_none() {
-            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+            self.model = Some(gliner_onnx::GlinerOnnx::load_or_fetch(&self.snapshot)?);
         }
         let model = self.model.as_mut().expect("just loaded");
         Ok(model.classify(text, task, labels, false, 0.5)?.scores)
@@ -98,7 +111,7 @@ impl Extractor for GlinerExtractor {
         threshold: f32,
     ) -> Result<Vec<crate::types::ScoredRelation>> {
         if self.model.is_none() {
-            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+            self.model = Some(gliner_onnx::GlinerOnnx::load_or_fetch(&self.snapshot)?);
         }
         let model = self.model.as_mut().expect("just loaded");
         // Layouts without the scorer graph (DanKau 3-graph split) simply
@@ -144,7 +157,7 @@ impl Extractor for GlinerExtractor {
 
     fn embed(&mut self, text: &str) -> Result<Option<Vec<f32>>> {
         if self.model.is_none() {
-            self.model = Some(gliner_onnx::GlinerOnnx::load(&self.snapshot)?);
+            self.model = Some(gliner_onnx::GlinerOnnx::load_or_fetch(&self.snapshot)?);
         }
         let model = self.model.as_mut().expect("just loaded");
         Ok(Some(model.embed(text)?))
