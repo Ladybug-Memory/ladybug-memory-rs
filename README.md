@@ -53,6 +53,14 @@ head. `extract_relations` (typed edges via `heads.onnx`, zero-shot relation
 types) is implemented and smoke-tested; pipeline wiring (typed `RelatesTo`
 instead of `coOccurs`) is next.
 
+A fresh machine has no snapshot: the first `remember`/`demo` downloads it
+automatically (~780 MB, via the `hf` CLI when present, else `curl` against
+`https://huggingface.co`), or pre-warm explicitly with `lbm fetch-model`.
+`lbm status` reports `model: <path> (ready|missing)`. Opt out of network
+with `HF_HUB_OFFLINE=1` (commands needing the model then fail with the
+manual-download URL). Overrides: `LB_MEMORY_MODEL_REPO`,
+`LB_MEMORY_MODEL_REVISION`, `HF_ENDPOINT`, `HF_TOKEN`.
+
 The `lbug` crate (crates.io, `0.22.3`) links the **shared** prebuilt
 `liblbug.dylib` from a persistent cache (`~/.cache/lbug-shared-0.22.3`,
 pinned via `.cargo/config.toml` so `cargo clean` never forces a
@@ -65,6 +73,8 @@ errors. The GLiNER model resolves from the shared HF cache.
 
 ```sh
 export LB_MEMORY_DB=~/.pi/agent/lb-memory/memory.lbdb   # default location
+lbm fetch-model                        # first run only: download the GLiNER snapshot (~780 MB)
+                                       # (also auto-fetched on first remember/demo)
 lbm remember "User prefers Python for scripting" --scope project
 lbm remember "Tim Cook runs Apple." --via-sqlite --scope project
 lbm sync                                   # drain pending intake (no-op when caught up)
