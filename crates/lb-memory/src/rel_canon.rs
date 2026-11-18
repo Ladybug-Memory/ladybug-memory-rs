@@ -8,10 +8,12 @@
 //! recall bridge). Regenerate with:
 //!
 //! ```sh
-//! ORT_DYLIB_PATH=... LB_MEMORY_SNAPSHOT=... \
-//!   cargo run --release -p lb-memory --example build_rel_canon_db -- \
+//! cargo run --release -p lb-memory --example build_rel_canon_db -- \
 //!   /tmp/rel_canon.new.sqlite crates/lb-memory/src/rel_canon.sqlite
 //! ```
+//!
+//! (needs `lbm fetch-model` once for the model snapshot + ORT lib;
+//! `LB_MEMORY_SNAPSHOT` overrides the snapshot dir)
 //!
 //! Retrieval mirrors AutoSchemaKG's conceptualization step without an
 //! LLM: the fact text is embedded, the nearest domain is selected by

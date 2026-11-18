@@ -1,9 +1,10 @@
 //! Sample graph extraction over the ladybug test texts.
 //!
 //! ```sh
-//! ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib \
-//!   cargo run -p gliner-onnx --example extract -- <snapshot-dir> [threshold]
+//! cargo run -p gliner-onnx --example extract -- <snapshot-dir> [threshold]
 //! ```
+//!
+//! (needs `lbm fetch-model` once for the model snapshot + ORT lib)
 //!
 //! Prints entity mentions (graph nodes) that `LadybugMemory::store_with_entities`
 //! will link via `MentionedIn` edges.

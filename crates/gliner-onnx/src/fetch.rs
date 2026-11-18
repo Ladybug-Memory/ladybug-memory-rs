@@ -226,7 +226,7 @@ fn ensure_via_hf_cli(dir: &Path, missing: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn curl_bin() -> Option<&'static str> {
+pub(crate) fn curl_bin() -> Option<&'static str> {
     for cand in ["curl"] {
         // `command -v`-style probe without a shell.
         if std::process::Command::new(cand)

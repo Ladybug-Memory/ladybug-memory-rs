@@ -65,6 +65,13 @@ impl GlinerExtractor {
     pub fn ensure_model(&self) -> Result<()> {
         gliner_onnx::fetch::ensure_model(std::path::Path::new(&self.snapshot))
     }
+
+    /// Ensure the ONNX Runtime dylib is provisioned (downloaded once into
+    /// the cache); returns its path. `lbm fetch-model` calls this alongside
+    /// [`Self::ensure_model`] so a fresh machine needs no `ORT_DYLIB_PATH`.
+    pub fn ensure_runtime(&self) -> Result<std::path::PathBuf> {
+        gliner_onnx::runtime::ensure_ort()
+    }
 }
 
 impl Extractor for GlinerExtractor {

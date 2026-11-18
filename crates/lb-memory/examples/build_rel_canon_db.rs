@@ -2,9 +2,10 @@
 //! page-type domains with per-domain extraction schemas.
 //!
 //! ```sh
-//! ORT_DYLIB_PATH=... LB_MEMORY_SNAPSHOT=... \
-//!   cargo run --release -p lb-memory --example build_rel_canon_db -- src/rel_canon.sqlite
+//! cargo run --release -p lb-memory --example build_rel_canon_db -- src/rel_canon.sqlite
 //! ```
+//!
+//! (needs `lbm fetch-model` once for the model snapshot + ORT lib)
 //!
 //! Domain set (64): `base` plus 63 types grounded in DBpedia instance
 //! counts (Person 1.59M, Place 967K, Work 552K, Organisation 318K,

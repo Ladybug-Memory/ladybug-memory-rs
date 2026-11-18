@@ -99,9 +99,8 @@ def main() -> int:
         SKIP_ROLES.discard("toolResult")
 
     lbm = os.environ.get("LB_MEMORY_BIN", "lbm")
-    if args.apply and "ORT_DYLIB_PATH" not in os.environ:
-        print("ORT_DYLIB_PATH is not set — lbm cannot load the GLiNER model.", file=sys.stderr)
-        return 2
+    # No ORT_DYLIB_PATH needed: `lbm fetch-model` provisions the model + ORT
+    # lib into cache dirs on first run (also auto-provisioned on first use).
 
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
     cand = [(p, s, i, r, t) for (p, s, i, r, t) in iter_messages(SESSIONS, args.project, since)]

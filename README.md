@@ -34,14 +34,20 @@ provenance keeps `message_refs` (opaque ids), never message text.
 ## Build / run (always `--release` — debug artifacts are ~0.5 GB)
 
 ```sh
-export ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib   # 1.23+; the ladybug-memory
-                                                      # uv venv ships one at
-# .venv/lib/python3.13/site-packages/onnxruntime/capi/
-
 cargo test --release -p lb-memory --features test-support
-cargo test --release -p gliner-onnx   # needs ORT_DYLIB_PATH + the model snapshot below
+cargo test --release -p gliner-onnx   # needs the model snapshot + ORT lib below
 cargo build --release -p lbm
+lbm fetch-model                        # first run only: provisions both (no env setup)
 ```
+
+No `ORT_DYLIB_PATH` wrapper needed: the ONNX Runtime dylib (`1.31.0`, the
+build the compiled `ort` crate links against) is downloaded once from the
+PyPI `onnxruntime` wheel into `~/.cache/ladybug-memory/lib/` and opened by
+absolute path — no `PATH` / `LD_LIBRARY_PATH` / `DYLD_*` / shell-profile
+setup on macOS, Linux, or Windows. Resolution is `$GLINER_ORT_DYLIB` >
+`$ORT_DYLIB_PATH` (kept for venv/system copies) > the cache. Overrides:
+`LB_MEMORY_ORT_DIR`, `LB_MEMORY_ORT_VERSION`, `LB_MEMORY_ORT_INDEX`,
+`LB_MEMORY_ORT_URL` (pin one wheel/archive URL, for mirrors/air-gap).
 
 The GLiNER snapshot resolves to `~/.cache/ladybug-memory/models/gliner2.5-base-v1-nico-onnx`
 (override with `LB_MEMORY_SNAPSHOT` / `--snapshot`): the `nicolasembleton`
@@ -53,12 +59,13 @@ head. `extract_relations` (typed edges via `heads.onnx`, zero-shot relation
 types) is implemented and smoke-tested; pipeline wiring (typed `RelatesTo`
 instead of `coOccurs`) is next.
 
-A fresh machine has no snapshot: the first `remember`/`demo` downloads it
-automatically (~780 MB, via the `hf` CLI when present, else `curl` against
-`https://huggingface.co`), or pre-warm explicitly with `lbm fetch-model`.
-`lbm status` reports `model: <path> (ready|missing)`. Opt out of network
-with `HF_HUB_OFFLINE=1` (commands needing the model then fail with the
-manual-download URL). Overrides: `LB_MEMORY_MODEL_REPO`,
+A fresh machine has no snapshot and no ORT lib: the first `remember`/`demo`
+downloads both automatically (model ~780 MB via the `hf` CLI when present,
+else `curl` against `https://huggingface.co`; ORT lib ~35 MB from PyPI),
+or pre-warm explicitly with `lbm fetch-model`. `lbm status` reports
+`model:` / `ort: <path> (ready|missing)`. Opt out of network with
+`HF_HUB_OFFLINE=1` (commands needing the model or the lib then fail with
+manual-download instructions). Model overrides: `LB_MEMORY_MODEL_REPO`,
 `LB_MEMORY_MODEL_REVISION`, `HF_ENDPOINT`, `HF_TOKEN`.
 
 The `lbug` crate (crates.io, `0.22.3`) links the **shared** prebuilt
@@ -73,8 +80,8 @@ errors. The GLiNER model resolves from the shared HF cache.
 
 ```sh
 export LB_MEMORY_DB=~/.pi/agent/lb-memory/memory.lbdb   # default location
-lbm fetch-model                        # first run only: download the GLiNER snapshot (~780 MB)
-                                       # (also auto-fetched on first remember/demo)
+lbm fetch-model                        # first run only: GLiNER snapshot (~780 MB) + ORT lib (~35 MB)
+                                       # (both also auto-provisioned on first remember/demo)
 lbm remember "User prefers Python for scripting" --scope project
 lbm remember "Tim Cook runs Apple." --via-sqlite --scope project
 lbm sync                                   # drain pending intake (no-op when caught up)
@@ -171,7 +178,7 @@ matching memory nodes; `/reload` re-reads the graph; `/help` lists commands.
 
 ```
 pi --extension ladybug-memory-rs/pi-plugin/index.ts
-# needs `lbm` on PATH (or LB_MEMORY_BIN) + ORT_DYLIB_PATH in pi's env
+# needs `lbm` on PATH (or LB_MEMORY_BIN); first run provisions model + ORT lib itself
 ```
 
 Tool `lb_memory` (`remember`/`search`), commands `/lb-remember`, `/lb-search`,

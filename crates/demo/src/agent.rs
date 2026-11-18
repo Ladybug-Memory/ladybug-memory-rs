@@ -183,7 +183,7 @@ fn agent_loop(cfg: AgentConfig, jobs: Receiver<ToAgent>, ans: &Sender<FromAgent>
                     }
                     Err(e) => {
                         let _ = ans.send(FromAgent::Error(format!(
-                            "remember failed (is ORT_DYLIB_PATH set to libonnxruntime?): {e:#}"
+                            "remember failed (run `lbm fetch-model` to provision model + ORT lib): {e:#}"
                         )));
                     }
                 }

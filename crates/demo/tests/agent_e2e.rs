@@ -2,7 +2,8 @@
 //! messages the GPUI view sends/receives) with the real GLiNER model.
 //!
 //! Run with:
-//!   LB_DEMO_AGENT_TEST=1 ORT_DYLIB_PATH=<libonnxruntime> cargo test -p demo --release
+//!   LB_DEMO_AGENT_TEST=1 cargo test -p demo --release
+//! (needs `lbm fetch-model` once for the model snapshot + ORT lib)
 //!
 //! Pixels aren't covered here (no display in CI); rendering is exercised
 //! live via `lbm demo`.

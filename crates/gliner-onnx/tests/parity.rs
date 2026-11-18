@@ -6,7 +6,8 @@
 //!   --threshold 0.5 --dump ../ladybug-memory-rs/crates/gliner-onnx/tests/data/baseline.json
 //! ```
 //!
-//! Requires `ORT_DYLIB_PATH` at test time (see workspace README).
+//! Needs the model snapshot + ORT lib at test time (`lbm fetch-model`
+//! provisions both; see workspace README).
 
 use gliner_onnx::GlinerOnnx;
 use serde_json::Value;

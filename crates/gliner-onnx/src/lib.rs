@@ -40,6 +40,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use ort::environment::Environment;
 pub mod fetch;
+pub mod runtime;
 use ort::value::Tensor;
 use ort::session::Session;
 use regex::Regex;
@@ -238,8 +239,10 @@ impl GlinerOnnx {
     /// for first-run downloads. The hint names the missing files so a new
     /// user knows exactly what to fetch.
     ///
-    /// The ONNX Runtime dylib resolves via `ORT_DYLIB_PATH`, or
-    /// `GLINER_ORT_DYLIB` to override without touching the shared variable.
+    /// The ONNX Runtime dylib resolves via [`runtime::resolve_dylib`]
+    /// (`GLINER_ORT_DYLIB` > `ORT_DYLIB_PATH` > the `lbm fetch-model`
+    /// cache) — no `PATH`/`LD_LIBRARY_PATH` setup on any OS. This entry
+    /// point never touches the network; use [`Self::load_or_fetch`].
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
         if !fetch::is_loadable(dir) {
@@ -255,20 +258,27 @@ impl GlinerOnnx {
     }
 
     /// Fetch any missing snapshot files (see [`fetch::ensure_model`]) and
-    /// then [`Self::load`]. This is the entry point CLIs should use so a
-    /// fresh machine downloads the ~780 MB export once, on first inference.
+    /// the ONNX Runtime dylib (see [`runtime::ensure_ort`]), then
+    /// [`Self::load`]. This is the entry point CLIs should use so a fresh
+    /// machine downloads the ~780 MB export and the ~35 MB ORT lib once,
+    /// on first inference.
     pub fn load_or_fetch(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fetch::ensure_model(&dir)?;
+        runtime::ensure_ort()?;
         Self::load_complete(dir)
     }
 
     fn load_complete(dir: PathBuf) -> Result<Self> {
-        let dylib = std::env::var("GLINER_ORT_DYLIB")
-            .or_else(|_| std::env::var("ORT_DYLIB_PATH"))
-            .map_err(|_| anyhow!("set ORT_DYLIB_PATH to libonnxruntime (see README)"))?;
+        let dylib = runtime::resolve_dylib().ok_or_else(|| {
+            anyhow!(
+                "ONNX Runtime lib not found (looked in $GLINER_ORT_DYLIB, \
+                 $ORT_DYLIB_PATH, {}); run `lbm fetch-model` to download it",
+                runtime::cached_dylib().display()
+            )
+        })?;
         let env = Arc::new(
-            ort::init_from(dylib.as_str())
+            ort::init_from(&dylib)
                 .map_err(|e| anyhow!("loading ONNX Runtime dylib: {e}"))?
                 .with_name("gliner-onnx")
                 .build()?,

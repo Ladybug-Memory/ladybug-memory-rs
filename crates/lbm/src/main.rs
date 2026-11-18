@@ -61,9 +61,9 @@ enum Commands {
     Remember(RememberArgs),
     /// Drain any pending SQLite intake into the graph (crash recovery).
     Sync(SyncArgs),
-    /// Download the GLiNER model snapshot (first-run setup).
-    /// Also fetched automatically on the first `remember`/`demo` that
-    /// needs it; this subcommand just pre-warms without running inference.
+    /// First-run setup: download the GLiNER snapshot + ONNX Runtime lib.
+    /// Also provisioned automatically on the first `remember`/`demo` that
+    /// needs them; this subcommand just pre-warms without running inference.
     FetchModel(FetchModelArgs),
     /// Open the GPUI demo: chat on the left, live entity graph on the right.
     Demo(DemoArgs),
@@ -576,18 +576,22 @@ fn print_report(r: &lb_memory::types::RememberReport) {
     }
 }
 
-/// Download the GLiNER snapshot without running inference (first-run
-/// setup / pre-warm). Inference commands (`remember`, `demo`) fetch
-/// automatically on first use; this is the explicit, scriptable form.
+/// First-run setup / pre-warm: download the GLiNER snapshot (~780 MB) and
+/// the ONNX Runtime dylib (~35 MB) without running inference. Inference
+/// commands (`remember`, `demo`) provision both automatically on first
+/// use; this is the explicit, scriptable form. Afterwards no
+/// `ORT_DYLIB_PATH` is needed — the dylib is opened from its cache path.
 fn cmd_fetch_model(args: FetchModelArgs, out: Out) -> Result<()> {
     let snapshot = args.snapshot.unwrap_or_else(default_snapshot);
     let extractor = GlinerExtractor::new(snapshot.clone());
     extractor.ensure_model()?;
+    let ort = extractor.ensure_runtime()?;
     if out.json {
-        print_json(&serde_json::json!({ "snapshot": snapshot, "ready": true }), out);
+        print_json(&serde_json::json!({ "snapshot": snapshot, "ort": ort, "ready": true }), out);
         return Ok(());
     }
     println!("model ready at {snapshot}");
+    println!("ort lib ready at {}", ort.display());
     Ok(())
 }
 
@@ -801,10 +805,11 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
         Ok(db) => (db.path().to_string(), db.pending_count().unwrap_or(0)),
         Err(_) => ("-".to_string(), 0),
     };
-    // Model snapshot: a fresh machine has no snapshot until the first
-    // `remember`/`demo` (auto-fetch) or an explicit `fetch-model`.
+    // Model snapshot + ORT lib: a fresh machine has neither until the
+    // first `remember`/`demo` (auto-provision) or an explicit `fetch-model`.
     let model_path = std::env::var("LB_MEMORY_SNAPSHOT").unwrap_or_else(|_| default_snapshot());
     let model_ready = lb_memory::fetch::is_loadable(std::path::Path::new(&model_path));
+    let (ort_path, ort_ready) = lb_memory::runtime::status();
     if out.json {
         print_json(
             &serde_json::json!({
@@ -813,6 +818,7 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
                 "labels": DEFAULT_LABELS_NOTE,
                 "intake": intake_path, "intake_pending": pending,
                 "model": model_path, "model_ready": model_ready,
+                "ort": ort_path, "ort_ready": ort_ready,
             }),
             out,
         );
@@ -824,6 +830,10 @@ fn cmd_status(args: StatusArgs, db: Option<String>, out: Out) -> Result<()> {
     println!(
         "model: {model_path} ({})",
         if model_ready { "ready" } else { "missing — run `lbm fetch-model`" }
+    );
+    println!(
+        "ort: {ort_path} ({})",
+        if ort_ready { "ready" } else { "missing — run `lbm fetch-model`" }
     );
     Ok(())
 }
