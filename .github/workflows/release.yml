@@ -1,0 +1,322 @@
+name: Release
+
+# Builds the `lbm` binary for every supported platform and packages it with
+# the SQLite database(s) it needs, then publishes a GitHub Release.
+#
+# Shipped in each platform bundle:
+#   - `lbm` (or `lbm.exe`) — the CLI
+#   - the shared liblbug library (`liblbug.dylib` / `liblbug.so` /
+#     `lbug_shared.dll`) — must sit next to the binary (rpath is
+#     `@loader_path` / `$ORIGIN`; Windows resolves DLLs beside the exe)
+#   - `rel_canon.sqlite` — the domain/schema inventory. The binary also
+#     embeds it (spills to `~/.cache/ladybug-memory/` on first run); the
+#     shipped copy is for air-gap / `LB_MEMORY_REL_CANON_DB` overrides.
+#   - `README.txt` — install + first-run notes
+#
+# Also published once per release (platform-independent):
+#   - `rel_canon.sqlite` + checksums
+#
+# NOT bundled (by design — see .gitignore, they are user data created at
+# runtime): `*.lbdb` graph files, `*.intake.sqlite` staging files, the
+# GLiNER model snapshot (~780 MB) and the ONNX Runtime lib (~35 MB).
+# Those are provisioned on first run via `lbm fetch-model` (or
+# automatically on the first `remember`/`demo`).
+#
+# Release flow: bump `crates/lbm/Cargo.toml`, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+# `workflow_dispatch` builds everything without publishing (artifacts only).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Keep in sync with the `lbug` dependency in crates/lb-memory/Cargo.toml.
+  LBUG_VERSION: "0.22.3"
+  # Keep in sync with REL_CANON_DB_VERSION in crates/lb-memory/src/rel_canon.rs.
+  REL_CANON_DB_VERSION: "2"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            # Shared-lib archive on LadybugDB/ladybug releases (see the
+            # `lbug` crate's scripts/download-liblbug.sh for naming).
+            lbug_archive: liblbug-osx-arm64.tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            lbug_archive: liblbug-osx-x86_64.tar.gz
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            lbug_archive: liblbug-linux-x86_64.tar.gz
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            lbug_archive: liblbug-linux-aarch64.tar.gz
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            lbug_archive: liblbug-windows-x86_64.zip
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # GPUI (via crates/demo, linked into lbm) needs system GUI/toolkit
+      # headers on Linux; OpenSSL for the `lbug` build harness.
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential pkg-config libssl-dev clang
+          libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+
+      - name: Provision shared liblbug
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="${{ matrix.lbug_archive }}"
+          URL="https://github.com/LadybugDB/ladybug/releases/download/v${LBUG_VERSION}/${ARCHIVE}"
+          echo "Downloading $URL"
+          mkdir -p "$RUNNER_TEMP/lbug-dl" "$RUNNER_TEMP/lbug-shared"
+          curl -fsSL -o "$RUNNER_TEMP/lbug-dl/$ARCHIVE" "$URL"
+          case "$ARCHIVE" in
+            *.zip) (cd "$RUNNER_TEMP/lbug-shared" && 7z x -y "$RUNNER_TEMP/lbug-dl/$ARCHIVE" > /dev/null) ;;
+            *) tar -xzf "$RUNNER_TEMP/lbug-dl/$ARCHIVE" -C "$RUNNER_TEMP/lbug-shared" ;;
+          esac
+          # Archives nest lib/ + headers at varying depths; locate them.
+          LIB_FILE="$(find "$RUNNER_TEMP/lbug-shared" \( -name 'liblbug.dylib' -o -name 'liblbug.so*' -o -name 'lbug_shared.dll' \) -not -name '*.*.*' | head -n 1)"
+          if [ -z "$LIB_FILE" ]; then
+            LIB_FILE="$(find "$RUNNER_TEMP/lbug-shared" \( -name 'liblbug.dylib' -o -name 'liblbug.so*' -o -name 'lbug_shared.dll' \) | head -n 1)"
+          fi
+          HEADER_DIR="$(dirname "$(find "$RUNNER_TEMP/lbug-shared" -name 'lbug.h' | head -n 1)")"
+          if [ -z "$LIB_FILE" ] || [ -z "$HEADER_DIR" ]; then
+            echo "::error::could not locate liblbug shared lib or headers under $RUNNER_TEMP/lbug-shared"
+            find "$RUNNER_TEMP/lbug-shared" -maxdepth 3 | head -n 50
+            exit 1
+          fi
+          LIB_DIR="$(dirname "$LIB_FILE")"
+          echo "liblbug lib: $LIB_FILE"
+          echo "liblbug headers: $HEADER_DIR"
+          echo "LBUG_LIB_DIR=$LIB_DIR" >> "$GITHUB_ENV"
+          echo "LBUG_INCLUDE_DIR=$HEADER_DIR" >> "$GITHUB_ENV"
+
+      # The repo's .cargo/config.toml points at a machine-local cache
+      # (/Users/arun/.cache/...) that does not exist on CI. Overwrite it
+      # with the provisioned paths plus a *portable* rpath so the binary
+      # finds the dylib shipped beside it (@loader_path on macOS,
+      # $ORIGIN on Linux; Windows resolves DLLs next to the exe).
+      - name: Point Cargo at provisioned liblbug
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            RPATH='["-C", "link-args=-Wl,-rpath,@loader_path"]'
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            RPATH='["-C", "link-args=-Wl,-rpath,$ORIGIN"]'
+          else
+            RPATH='[]'
+          fi
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<EOF
+          # CI-generated (see .github/workflows/release.yml): shared liblbug
+          # provisioned per-run from LadybugDB/ladybug releases.
+          [env]
+          LBUG_SHARED = "1"
+          LBUG_LIBRARY_DIR = "$LBUG_LIB_DIR"
+          LBUG_INCLUDE_DIR = "$LBUG_INCLUDE_DIR"
+
+          [build]
+          rustflags = $RPATH
+          EOF
+          cat .cargo/config.toml
+
+      - name: Build lbm
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }} -p lbm
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/lbm"
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+          # Opens a throwaway graph (schema + FTS install tolerated offline),
+          # proving the binary runs without a model or existing DB.
+          "$BIN" --db "$RUNNER_TEMP/smoke.lbdb" status
+          # The shippable SQLite DB must be fresh: user_version matches the
+          # embedded REL_CANON_DB_VERSION and the 64-domain inventory is intact.
+          python3 - <<'EOF'
+          import os, sqlite3
+          db = sqlite3.connect('crates/lb-memory/src/rel_canon.sqlite')
+          ver = db.execute('PRAGMA user_version').fetchone()[0]
+          assert ver == int(os.environ['REL_CANON_DB_VERSION']), f'user_version={ver}'
+          n = db.execute('SELECT COUNT(*) FROM sk_domains').fetchone()[0]
+          assert n == 64, f'sk_domains={n}'
+          print(f'rel_canon.sqlite OK: user_version={ver}, domains={n}')
+          EOF
+
+      - name: Stage + package bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME:-local}"
+          DIST="dist/lbm-${TAG}-${{ matrix.target }}"
+          mkdir -p "$DIST"
+          BIN="target/${{ matrix.target }}/release/lbm"
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          cp "$BIN" "$DIST/"
+          # Dereference symlinks: ship one real file under the link name the
+          # binary was linked against (liblbug.dylib / liblbug.so).
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            find "$LBUG_LIB_DIR" -maxdepth 1 \( -name '*.dll' -o -name '*.lib' \) -exec cp {} "$DIST/" \;
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            cp -L "$LBUG_LIB_DIR/liblbug.dylib" "$DIST/"
+          else
+            cp -L "$LBUG_LIB_DIR/liblbug.so" "$DIST/" 2>/dev/null || cp -L "$LBUG_LIB_DIR/liblbug.so.0" "$DIST/liblbug.so"
+          fi
+          cp crates/lb-memory/src/rel_canon.sqlite "$DIST/"
+          cat > "$DIST/README.txt" <<EOF
+          lbm $TAG — ${{ matrix.target }}
+          =====================================
+          Contents: lbm binary, shared liblbug library, rel_canon.sqlite.
+
+          Install: copy lbm to a directory on PATH, keeping the liblbug
+          library file in the SAME directory. Do not separate them.
+
+          First run: lbm fetch-model
+            Downloads the GLiNER model snapshot (~780 MB) and the ONNX
+            Runtime lib (~35 MB) into ~/.cache/ladybug-memory/. Afterwards
+            lbm works offline (HF_HUB_OFFLINE=1 opts out of downloads).
+
+          Data lives at ~/.pi/agent/lb-memory/memory.lbdb by default
+          (override with --db / LB_MEMORY_DB); the .intake.sqlite sibling
+          and rel_canon cache are created automatically.
+
+          rel_canon.sqlite is embedded in the binary; this copy is for
+          air-gap use via LB_MEMORY_REL_CANON_DB=<path>.
+          EOF
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd dist && 7z a -y "lbm-${TAG}-${{ matrix.target }}.zip" "lbm-${TAG}-${{ matrix.target }}" > /dev/null)
+            echo "BUNDLE=dist/lbm-${TAG}-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
+          else
+            tar -czf "dist/lbm-${TAG}-${{ matrix.target }}.tar.gz" -C dist "lbm-${TAG}-${{ matrix.target }}"
+            echo "BUNDLE=dist/lbm-${TAG}-${{ matrix.target }}.tar.gz" >> "$GITHUB_ENV"
+          fi
+          python3 - "$BUNDLE" <<'EOF'
+          import hashlib, sys
+          p = sys.argv[1]
+          h = hashlib.sha256(open(p, 'rb').read()).hexdigest()
+          open(p + '.sha256', 'w').write(f'{h}  {p.split("/")[-1]}\n')
+          print(f'{h}  {p}')
+          EOF
+          ls -la dist/
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: lbm-${{ matrix.target }}
+          path: |
+            dist/lbm-*.tar.gz
+            dist/lbm-*.zip
+            dist/lbm-*.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub Release
+    needs: build
+    # Only real tags publish; workflow_dispatch stops at artifacts.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The tag must match the binary's own version so `lbm --version`
+      # and the release agree.
+      - name: Check tag matches lbm version
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          CARGO_V="$(grep -m1 '^version' crates/lbm/Cargo.toml | cut -d'"' -f2)"
+          echo "tag: $TAG, crates/lbm version: $CARGO_V"
+          if [ "$TAG" != "v$CARGO_V" ]; then
+            echo "::error::tag $TAG does not match crates/lbm version $CARGO_V — bump the version, commit, and re-tag."
+            exit 1
+          fi
+
+      - name: Add standalone SQLite DB + checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp crates/lb-memory/src/rel_canon.sqlite dist/rel_canon.sqlite
+          (cd dist && sha256sum rel_canon.sqlite lbm-*.tar.gz lbm-*.zip > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          ls -la dist/
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/lbm-*.tar.gz
+            dist/lbm-*.zip
+            dist/rel_canon.sqlite
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            Download the bundle for your platform, extract it, and keep the
+            `lbm` binary and the liblbug library in the **same** directory
+            (put that directory on `PATH`).
+
+            | Bundle suffix | Platform |
+            |---|---|
+            | `aarch64-apple-darwin` | macOS Apple Silicon |
+            | `x86_64-apple-darwin` | macOS Intel |
+            | `x86_64-unknown-linux-gnu` | Linux x86_64 |
+            | `aarch64-unknown-linux-gnu` | Linux ARM64 |
+            | `x86_64-pc-windows-msvc` | Windows x86_64 |
+
+            ## First run
+
+            ```sh
+            lbm fetch-model   # one-time: GLiNER snapshot (~780 MB) + ONNX Runtime lib (~35 MB)
+            lbm status        # model: ready, database counts
+            ```
+
+            The model and runtime are **not** in these bundles — `fetch-model`
+            (or the first `remember`/`demo`) downloads them into
+            `~/.cache/ladybug-memory/`. Afterwards `lbm` works fully offline.
+
+            `rel_canon.sqlite` is also published standalone for air-gap setups
+            (`LB_MEMORY_REL_CANON_DB=<path>`); it is already embedded in the
+            binary and in every bundle. Graph (`*.lbdb`) and intake
+            (`*.intake.sqlite`) databases are created on first use, not shipped.
