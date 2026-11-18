@@ -24,6 +24,10 @@ name: Release
 #
 # Release flow: bump `crates/lbm/Cargo.toml`, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
 # `workflow_dispatch` builds everything without publishing (artifacts only).
+#
+# NOTE: bundles bypass Actions artifact storage — matrix jobs upload
+# straight to the (draft) GitHub Release with `gh release upload`.
+# Artifact *uploads* are only used for manual `workflow_dispatch` runs.
 
 on:
   push:
@@ -41,8 +45,46 @@ env:
   REL_CANON_DB_VERSION: "2"
 
 jobs:
+  # On tag pushes, create the draft release up front so matrix jobs can
+  # upload into it directly (no Actions artifact storage involved).
+  # On dispatch this is a no-op so the matrix still runs.
+  release-init:
+    name: create draft release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check tag matches lbm version
+        uses: actions/checkout@v4
+      - name: Verify tag == crates/lbm version
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          CARGO_V="$(grep -m1 '^version' crates/lbm/Cargo.toml | cut -d'"' -f2)"
+          echo "tag: $TAG, crates/lbm version: $CARGO_V"
+          if [ "$TAG" != "v$CARGO_V" ]; then
+            echo "::error::tag $TAG does not match crates/lbm version $CARGO_V — bump the version, commit, and re-tag."
+            exit 1
+          fi
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG already exists — reusing (assets will be overwritten)"
+          else
+            gh release create "$TAG" --draft --generate-notes --title "$TAG"
+          fi
+
   build:
     name: build (${{ matrix.target }})
+    needs: [release-init]
+    # release-init is skipped on dispatch; `always() && !cancelled()` keeps
+    # the matrix running in that case, while still waiting for init on tags.
+    if: always() && !cancelled() && (needs.release-init.result == 'success' || needs.release-init.result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -82,12 +124,16 @@ jobs:
 
       # GPUI (via crates/demo, linked into lbm) needs system GUI/toolkit
       # headers on Linux; OpenSSL for the `lbug` build harness.
+      # The `lbug` FFI shim is C++20 (`<format>`), which needs GCC 13+ —
+      # ubuntu-22.04's default GCC 11 does not provide it.
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: >
           sudo apt-get update &&
           sudo apt-get install -y build-essential pkg-config libssl-dev clang
-          libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+          libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev g++-13 &&
+          echo "CC=gcc-13" >> "$GITHUB_ENV" &&
+          echo "CXX=g++-13" >> "$GITHUB_ENV"
 
       - name: Provision shared liblbug
         shell: bash
@@ -248,7 +294,20 @@ jobs:
           EOF
           ls -la dist/
 
-      - name: Upload bundle
+      # On tags, publish straight into the draft release (no Actions
+      # artifact storage involved). On dispatch, keep an artifact for
+      # manual inspection instead.
+      - name: Upload bundle to release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${GITHUB_REF_NAME}" dist/lbm-*.tar.gz dist/lbm-*.zip dist/lbm-*.sha256 --clobber
+
+      - name: Upload bundle artifact (dispatch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: lbm-${{ matrix.target }}
@@ -258,55 +317,70 @@ jobs:
             dist/lbm-*.sha256
           if-no-files-found: error
 
+  # Finalize the release: standalone SQLite DB + checksums, install
+  # notes, then flip the draft live. Downloads the bundles back from
+  # the draft release, so no artifact storage is needed here either.
   release:
     name: publish GitHub Release
     needs: build
-    # Only real tags publish; workflow_dispatch stops at artifacts.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Download bundles
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      # The tag must match the binary's own version so `lbm --version`
-      # and the release agree.
-      - name: Check tag matches lbm version
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          CARGO_V="$(grep -m1 '^version' crates/lbm/Cargo.toml | cut -d'"' -f2)"
-          echo "tag: $TAG, crates/lbm version: $CARGO_V"
-          if [ "$TAG" != "v$CARGO_V" ]; then
-            echo "::error::tag $TAG does not match crates/lbm version $CARGO_V — bump the version, commit, and re-tag."
-            exit 1
-          fi
-
       - name: Add standalone SQLite DB + checksums
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          mkdir -p dist
+          gh release download "${GITHUB_REF_NAME}" --dir dist --pattern 'lbm-*'
           cp crates/lb-memory/src/rel_canon.sqlite dist/rel_canon.sqlite
           (cd dist && sha256sum rel_canon.sqlite lbm-*.tar.gz lbm-*.zip > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
-          ls -la dist/
+          gh release upload "${GITHUB_REF_NAME}" dist/rel_canon.sqlite dist/SHA256SUMS.txt --clobber
 
-      - name: Publish Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/lbm-*.tar.gz
-            dist/lbm-*.zip
-            dist/rel_canon.sqlite
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
-          body: |
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+            ## Install
+
+            Download the bundle for your platform, extract it, and keep the
+            `lbm` binary and the liblbug library in the **same** directory
+            (put that directory on `PATH`).
+
+            | Bundle suffix | Platform |
+            |---|---|
+            | `aarch64-apple-darwin` | macOS Apple Silicon |
+            | `x86_64-apple-darwin` | macOS Intel |
+            | `x86_64-unknown-linux-gnu` | Linux x86_64 |
+            | `aarch64-unknown-linux-gnu` | Linux ARM64 |
+            | `x86_64-pc-windows-msvc` | Windows x86_64 |
+
+            ## First run
+
+            ```sh
+            lbm fetch-model   # one-time: GLiNER snapshot (~780 MB) + ONNX Runtime lib (~35 MB)
+            lbm status        # model: ready, database counts
+            ```
+
+            The model and runtime are **not** in these bundles — `fetch-model`
+            (or the first `remember`/`demo`) downloads them into
+            `~/.cache/ladybug-memory/`. Afterwards `lbm` works fully offline.
+
+            `rel_canon.sqlite` is also published standalone for air-gap setups
+            (`LB_MEMORY_REL_CANON_DB=<path>`); it is already embedded in the
+            binary and in every bundle. Graph (`*.lbdb`) and intake
+            (`*.intake.sqlite`) databases are created on first use, not shipped.
+          EOF
+          gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md --draft=false
+          gh release view "${GITHUB_REF_NAME}" --json tagName,url,isDraft
             ## Install
 
             Download the bundle for your platform, extract it, and keep the
