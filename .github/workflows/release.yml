@@ -230,12 +230,14 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME:-local}"
+          # NOTE: $GITHUB_ENV only propagates to *later* steps, so keep the
+          # bundle path in a plain shell variable here.
           if [ "${{ runner.os }}" = "Windows" ]; then
-            (cd dist && 7z a -y "lbm-${TAG}-${{ matrix.target }}.zip" "lbm-${TAG}-${{ matrix.target }}" > /dev/null)
-            echo "BUNDLE=dist/lbm-${TAG}-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
+            BUNDLE="dist/lbm-${TAG}-${{ matrix.target }}.zip"
+            (cd dist && 7z a -y "$(basename "$BUNDLE")" "lbm-${TAG}-${{ matrix.target }}" > /dev/null)
           else
-            tar -czf "dist/lbm-${TAG}-${{ matrix.target }}.tar.gz" -C dist "lbm-${TAG}-${{ matrix.target }}"
-            echo "BUNDLE=dist/lbm-${TAG}-${{ matrix.target }}.tar.gz" >> "$GITHUB_ENV"
+            BUNDLE="dist/lbm-${TAG}-${{ matrix.target }}.tar.gz"
+            tar -czf "$BUNDLE" -C dist "lbm-${TAG}-${{ matrix.target }}"
           fi
           python3 - "$BUNDLE" <<'EOF'
           import hashlib, sys
