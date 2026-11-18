@@ -135,14 +135,18 @@ jobs:
           else
             RPATH='[]'
           fi
+          # Windows runners report backslash paths (D:\a\...) which are
+          # invalid TOML escapes — normalize to forward slashes.
+          LIB_DIR_FWD="${LBUG_LIB_DIR//\\//}"
+          INCLUDE_DIR_FWD="${LBUG_INCLUDE_DIR//\\//}"
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
           # CI-generated (see .github/workflows/release.yml): shared liblbug
           # provisioned per-run from LadybugDB/ladybug releases.
           [env]
           LBUG_SHARED = "1"
-          LBUG_LIBRARY_DIR = "$LBUG_LIB_DIR"
-          LBUG_INCLUDE_DIR = "$LBUG_INCLUDE_DIR"
+          LBUG_LIBRARY_DIR = "$LIB_DIR_FWD"
+          LBUG_INCLUDE_DIR = "$INCLUDE_DIR_FWD"
 
           [build]
           rustflags = $RPATH
@@ -153,11 +157,56 @@ jobs:
         shell: bash
         run: cargo build --release --target ${{ matrix.target }} -p lbm
 
+      # Staged BEFORE the smoke test so the smoke test exercises the exact
+      # shipped layout (binary + shared lib side by side). Symlinks are
+      # preserved (-P): the binary references the versioned soname
+      # (liblbug.0.dylib / liblbug.so.0) and tar/zip keep the chain intact.
+      - name: Stage bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME:-local}"
+          DIST="dist/lbm-${TAG}-${{ matrix.target }}"
+          mkdir -p "$DIST"
+          echo "DIST=$DIST" >> "$GITHUB_ENV"
+          BIN="target/${{ matrix.target }}/release/lbm"
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          cp "$BIN" "$DIST/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            find "$LBUG_LIB_DIR" -maxdepth 1 \( -name '*.dll' -o -name '*.lib' \) -exec cp {} "$DIST/" \;
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            cp -P "$LBUG_LIB_DIR"/liblbug*.dylib "$DIST/"
+          else
+            cp -P "$LBUG_LIB_DIR"/liblbug.so* "$DIST/"
+          fi
+          cp crates/lb-memory/src/rel_canon.sqlite "$DIST/"
+          cat > "$DIST/README.txt" <<EOF
+          lbm $TAG — ${{ matrix.target }}
+          =====================================
+          Contents: lbm binary, shared liblbug library, rel_canon.sqlite.
+
+          Install: copy lbm to a directory on PATH, keeping the liblbug
+          library file(s) in the SAME directory. Do not separate them.
+
+          First run: lbm fetch-model
+            Downloads the GLiNER model snapshot (~780 MB) and the ONNX
+            Runtime lib (~35 MB) into ~/.cache/ladybug-memory/. Afterwards
+            lbm works offline (HF_HUB_OFFLINE=1 opts out of downloads).
+
+          Data lives at ~/.pi/agent/lb-memory/memory.lbdb by default
+          (override with --db / LB_MEMORY_DB); the .intake.sqlite sibling
+          and rel_canon cache are created automatically.
+
+          rel_canon.sqlite is embedded in the binary; this copy is for
+          air-gap use via LB_MEMORY_REL_CANON_DB=<path>.
+          EOF
+          ls -la "$DIST/"
+
       - name: Smoke test
         shell: bash
         run: |
           set -euo pipefail
-          BIN="target/${{ matrix.target }}/release/lbm"
+          BIN="$DIST/lbm"
           if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
           "$BIN" --version
           "$BIN" --help > /dev/null
@@ -176,46 +225,11 @@ jobs:
           print(f'rel_canon.sqlite OK: user_version={ver}, domains={n}')
           EOF
 
-      - name: Stage + package bundle
+      - name: Archive bundle
         shell: bash
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME:-local}"
-          DIST="dist/lbm-${TAG}-${{ matrix.target }}"
-          mkdir -p "$DIST"
-          BIN="target/${{ matrix.target }}/release/lbm"
-          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
-          cp "$BIN" "$DIST/"
-          # Dereference symlinks: ship one real file under the link name the
-          # binary was linked against (liblbug.dylib / liblbug.so).
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            find "$LBUG_LIB_DIR" -maxdepth 1 \( -name '*.dll' -o -name '*.lib' \) -exec cp {} "$DIST/" \;
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            cp -L "$LBUG_LIB_DIR/liblbug.dylib" "$DIST/"
-          else
-            cp -L "$LBUG_LIB_DIR/liblbug.so" "$DIST/" 2>/dev/null || cp -L "$LBUG_LIB_DIR/liblbug.so.0" "$DIST/liblbug.so"
-          fi
-          cp crates/lb-memory/src/rel_canon.sqlite "$DIST/"
-          cat > "$DIST/README.txt" <<EOF
-          lbm $TAG — ${{ matrix.target }}
-          =====================================
-          Contents: lbm binary, shared liblbug library, rel_canon.sqlite.
-
-          Install: copy lbm to a directory on PATH, keeping the liblbug
-          library file in the SAME directory. Do not separate them.
-
-          First run: lbm fetch-model
-            Downloads the GLiNER model snapshot (~780 MB) and the ONNX
-            Runtime lib (~35 MB) into ~/.cache/ladybug-memory/. Afterwards
-            lbm works offline (HF_HUB_OFFLINE=1 opts out of downloads).
-
-          Data lives at ~/.pi/agent/lb-memory/memory.lbdb by default
-          (override with --db / LB_MEMORY_DB); the .intake.sqlite sibling
-          and rel_canon cache are created automatically.
-
-          rel_canon.sqlite is embedded in the binary; this copy is for
-          air-gap use via LB_MEMORY_REL_CANON_DB=<path>.
-          EOF
           if [ "${{ runner.os }}" = "Windows" ]; then
             (cd dist && 7z a -y "lbm-${TAG}-${{ matrix.target }}.zip" "lbm-${TAG}-${{ matrix.target }}" > /dev/null)
             echo "BUNDLE=dist/lbm-${TAG}-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
