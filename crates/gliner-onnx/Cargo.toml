@@ -7,7 +7,11 @@ license.workspace = true
 
 [dependencies]
 ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
-tokenizers = "0.22"
+# No `esaxx_fast` (default): its C++ (`esaxx-rs` with hardcoded /MT) breaks
+# the Windows link against the /MD `lbug` shared-lib shim (LNK2038), and it
+# only accelerates the unigram *trainer* — inference is unaffected.
+# `onig` is kept: tokenizers requires one of `onig`/`fancy-regex`.
+tokenizers = { version = "0.22", default-features = false, features = ["onig", "progressbar"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
