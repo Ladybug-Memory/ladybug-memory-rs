@@ -66,7 +66,8 @@ or pre-warm explicitly with `lbm fetch-model`. `lbm status` reports
 `model:` / `ort: <path> (ready|missing)`. Opt out of network with
 `HF_HUB_OFFLINE=1` (commands needing the model or the lib then fail with
 manual-download instructions). Model overrides: `LB_MEMORY_MODEL_REPO`,
-`LB_MEMORY_MODEL_REVISION`, `HF_ENDPOINT`, `HF_TOKEN`.
+`LB_MEMORY_MODEL_REVISION`, `LB_MEMORY_MODEL_FILES` (different export
+layout), `HF_ENDPOINT`, `HF_TOKEN`.
 
 The `lbug` crate (crates.io, `0.22.3`) links the **shared** prebuilt
 `liblbug.dylib` from a persistent cache (`~/.cache/lbug-shared-0.22.3`,

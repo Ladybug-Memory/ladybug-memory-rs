@@ -23,6 +23,7 @@
 //! | `LB_MEMORY_SNAPSHOT` (target dir) | `~/.cache/ladybug-memory/models/gliner2.5-base-v1-nico-onnx` |
 //! | `LB_MEMORY_MODEL_REPO` | `nicolasembleton/gliner2.5-base-v1-onnx` |
 //! | `LB_MEMORY_MODEL_REVISION` | `main` |
+//! | `LB_MEMORY_MODEL_FILES` (comma/space-separated) | [`MODEL_FILES`] (the Nico export) |
 //! | `HF_ENDPOINT` | `https://huggingface.co` |
 //! | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | (none — repo is public) |
 //! | `HF_HUB_OFFLINE=1` | fail fast instead of downloading |
@@ -46,6 +47,24 @@ pub const MODEL_FILES: &[&str] = &[
     "onnx/model.onnx",
     "onnx/heads.onnx",
 ];
+
+/// Expected snapshot files: [`MODEL_FILES`] by default, or `LB_MEMORY_MODEL_FILES`
+/// (comma- or space-separated repo-relative paths) to point at a different
+/// export — e.g. a DanKau 3-graph split or a custom fine-tune — without
+/// code changes. Unknown names get a 1-byte size floor (see `min_size`).
+pub fn model_files() -> Vec<String> {
+    if let Ok(list) = std::env::var("LB_MEMORY_MODEL_FILES") {
+        let files: Vec<String> = list
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !files.is_empty() {
+            return files;
+        }
+    }
+    MODEL_FILES.iter().map(|s| s.to_string()).collect()
+}
 
 /// Minimum accepted size for the two ONNX graphs (bytes). Catches truncated
 /// downloads that still leave a file behind: `model.onnx` is ~746 MB and
@@ -90,8 +109,8 @@ pub fn file_url(rel: &str) -> String {
 
 /// Repo-relative paths of the files missing (or suspiciously small) in `dir`.
 pub fn missing_files(dir: &Path) -> Vec<String> {
-    MODEL_FILES
-        .iter()
+    model_files()
+        .into_iter()
         .filter(|rel| {
             let p = dir.join(rel);
             match std::fs::metadata(&p) {
@@ -99,7 +118,6 @@ pub fn missing_files(dir: &Path) -> Vec<String> {
                 Err(_) => true,
             }
         })
-        .map(|s| s.to_string())
         .collect()
 }
 
@@ -293,6 +311,14 @@ fn ensure_via_curl(dir: &Path, missing: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Env vars are process-global and tests run in parallel: serialize
+    /// every test in this module so overrides never leak across tests.
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn tmpdir(tag: &str) -> PathBuf {
         let mut d = std::env::temp_dir();
@@ -309,7 +335,31 @@ mod tests {
     }
 
     #[test]
+    fn model_files_override_replaces_expected_list() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(
+            "LB_MEMORY_MODEL_FILES",
+            "tokenizer.json, onnx/encoder.onnx onnx/boundary.onnx",
+        );
+        assert_eq!(
+            model_files(),
+            vec!["tokenizer.json", "onnx/encoder.onnx", "onnx/boundary.onnx"]
+        );
+        // Only the overridden list matters: present file passes, Nico-only
+        // files are no longer expected.
+        let d = tmpdir("override");
+        touch(&d, "tokenizer.json", 8);
+        assert_eq!(
+            missing_files(&d),
+            vec!["onnx/encoder.onnx".to_string(), "onnx/boundary.onnx".to_string()]
+        );
+        std::env::remove_var("LB_MEMORY_MODEL_FILES");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn empty_dir_reports_all_missing() {
+        let _guard = env_lock().lock().unwrap();
         let d = tmpdir("empty");
         let missing = missing_files(&d);
         assert_eq!(missing.len(), MODEL_FILES.len());
@@ -319,6 +369,7 @@ mod tests {
 
     #[test]
     fn complete_dir_passes_and_truncated_onnx_fails() {
+        let _guard = env_lock().lock().unwrap();
         let d = tmpdir("full");
         for f in MODEL_FILES {
             // Satisfy the size floors (model/heads need MB-scale dummies).
@@ -334,6 +385,7 @@ mod tests {
 
     #[test]
     fn file_url_respects_endpoint_and_revision_overrides() {
+        let _guard = env_lock().lock().unwrap();
         std::env::set_var("HF_ENDPOINT", "https://mirror.example/");
         std::env::set_var("LB_MEMORY_MODEL_REVISION", "abc123");
         let url = file_url("onnx/model.onnx");
@@ -347,6 +399,7 @@ mod tests {
 
     #[test]
     fn offline_mode_errors_without_network() {
+        let _guard = env_lock().lock().unwrap();
         let d = tmpdir("offline");
         std::env::set_var("HF_HUB_OFFLINE", "1");
         let err = ensure_model(&d).unwrap_err();
