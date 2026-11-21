@@ -414,32 +414,3 @@ jobs:
           EOF
           gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md --draft=false
           gh release view "${GITHUB_REF_NAME}" --json tagName,url,isDraft
-            ## Install
-
-            Download the bundle for your platform, extract it, and keep the
-            `lbm` binary and the liblbug library in the **same** directory
-            (put that directory on `PATH`).
-
-            | Bundle suffix | Platform |
-            |---|---|
-            | `aarch64-apple-darwin` | macOS Apple Silicon |
-            | `x86_64-apple-darwin` | macOS Intel |
-            | `x86_64-unknown-linux-gnu` | Linux x86_64 |
-            | `aarch64-unknown-linux-gnu` | Linux ARM64 |
-            | `x86_64-pc-windows-msvc` | Windows x86_64 |
-
-            ## First run
-
-            ```sh
-            lbm fetch-model   # one-time: GLiNER snapshot (~780 MB) + ONNX Runtime lib (~35 MB)
-            lbm status        # model: ready, database counts
-            ```
-
-            The model and runtime are **not** in these bundles — `fetch-model`
-            (or the first `remember`/`demo`) downloads them into
-            `~/.cache/ladybug-memory/`. Afterwards `lbm` works fully offline.
-
-            `rel_canon.sqlite` is also published standalone for air-gap setups
-            (`LB_MEMORY_REL_CANON_DB=<path>`); it is already embedded in the
-            binary and in every bundle. Graph (`*.lbdb`) and intake
-            (`*.intake.sqlite`) databases are created on first use, not shipped.
