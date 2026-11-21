@@ -851,6 +851,233 @@ impl Store {
         rows.iter().map(|r| as_string(&r[0])).collect()
     }
 
+    /// Entities linked to active memories in scope, with scoped mention
+    /// counts. Powers `lbm tour`'s entity section.
+    pub fn tour_entities(
+        &self,
+        user: &str,
+        project: &str,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::types::TourEntity>> {
+        let (where_, params) = self.scope_where("m", user, project, session);
+        let cypher = format!(
+            "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE {where_} AND m.status = 'active' \
+             WITH e, count(r) AS n RETURN e.id, e.canonical_name, e.entity_type, CAST(e.aliases AS STRING), n \
+             ORDER BY n DESC LIMIT {}",
+            clamp_limit(limit)
+        );
+        let rows = self.run(&cypher, Self::params_to_borrowed(&params))?;
+        rows
+            .iter()
+            .map(|r| {
+                let canonical = as_string(&r[1]).unwrap_or_default();
+                Ok(crate::types::TourEntity {
+                    id: as_i64(&r[0])?,
+                    canonical: canonical.clone(),
+                    entity_type: as_string(&r[2]).unwrap_or_else(|_| "concept".into()),
+                    aliases: parse_alias_list(&r[3], &canonical),
+                    mentions: as_i64(&r[4]).unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+
+    /// User-scoped (cross-project) variant for `tour --scope global`.
+    pub fn tour_entities_global(&self, user: &str, limit: usize) -> Result<Vec<crate::types::TourEntity>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE m.user_id = $user AND m.status = 'active' \
+                 WITH e, count(r) AS n RETURN e.id, e.canonical_name, e.entity_type, CAST(e.aliases AS STRING), n \
+                 ORDER BY n DESC LIMIT {}",
+                clamp_limit(limit)
+            ),
+            vec![("user", Value::String(user.to_string()))],
+        )?;
+        rows
+            .iter()
+            .map(|r| {
+                let canonical = as_string(&r[1]).unwrap_or_default();
+                Ok(crate::types::TourEntity {
+                    id: as_i64(&r[0])?,
+                    canonical: canonical.clone(),
+                    entity_type: as_string(&r[2]).unwrap_or_else(|_| "concept".into()),
+                    aliases: parse_alias_list(&r[3], &canonical),
+                    mentions: as_i64(&r[4]).unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+
+    /// MentionedIn edges touching active memories in scope.
+    pub fn tour_mentions(
+        &self,
+        user: &str,
+        project: &str,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::types::TourMention>> {
+        let (where_, params) = self.scope_where("m", user, project, session);
+        let cypher = format!(
+            "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE {where_} AND m.status = 'active' \
+             RETURN e.canonical_name, e.id, m.id, r.mention_text, r.confidence \
+             ORDER BY m.id, e.canonical_name LIMIT {}",
+            clamp_limit(limit)
+        );
+        let rows = self.run(&cypher, Self::params_to_borrowed(&params))?;
+        rows
+            .iter()
+            .map(|r| {
+                Ok(crate::types::TourMention {
+                    entity: as_string(&r[0]).unwrap_or_default(),
+                    entity_id: as_i64(&r[1]).unwrap_or(-1),
+                    memory_id: as_i64(&r[2]).unwrap_or(-1),
+                    mention_text: as_string(&r[3]).unwrap_or_default(),
+                    confidence: as_f64(&r[4]).unwrap_or(0.0),
+                })
+            })
+            .collect()
+    }
+
+    pub fn tour_mentions_global(&self, user: &str, limit: usize) -> Result<Vec<crate::types::TourMention>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (e:Entity)-[r:MentionedIn]->(m:Memory) WHERE m.user_id = $user AND m.status = 'active' \
+                 RETURN e.canonical_name, e.id, m.id, r.mention_text, r.confidence \
+                 ORDER BY m.id, e.canonical_name LIMIT {}",
+                clamp_limit(limit)
+            ),
+            vec![("user", Value::String(user.to_string()))],
+        )?;
+        rows
+            .iter()
+            .map(|r| {
+                Ok(crate::types::TourMention {
+                    entity: as_string(&r[0]).unwrap_or_default(),
+                    entity_id: as_i64(&r[1]).unwrap_or(-1),
+                    memory_id: as_i64(&r[2]).unwrap_or(-1),
+                    mention_text: as_string(&r[3]).unwrap_or_default(),
+                    confidence: as_f64(&r[4]).unwrap_or(0.0),
+                })
+            })
+            .collect()
+    }
+
+    /// RelatesTo edges whose fact is an active in-scope memory.
+    pub fn tour_relations(
+        &self,
+        user: &str,
+        project: &str,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::types::TourRelation>> {
+        let (where_, params) = self.scope_where("m", user, project, session);
+        let cypher = format!(
+            "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) MATCH (m:Memory) \
+             WHERE r.memory_id = m.id AND {where_} AND m.status = 'active' \
+             RETURN a.canonical_name, a.id, b.canonical_name, b.id, r.relation_type, r.memory_id, \
+             r.confidence, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence \
+             ORDER BY r.memory_id LIMIT {}",
+            clamp_limit(limit)
+        );
+        let rows = self.run(&cypher, Self::params_to_borrowed(&params))?;
+        rows.iter().map(row_to_tour_relation).collect()
+    }
+
+    pub fn tour_relations_global(&self, user: &str, limit: usize) -> Result<Vec<crate::types::TourRelation>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (a:Entity)-[r:RelatesTo]->(b:Entity) MATCH (m:Memory) \
+                 WHERE r.memory_id = m.id AND m.user_id = $user AND m.status = 'active' \
+                 RETURN a.canonical_name, a.id, b.canonical_name, b.id, r.relation_type, r.memory_id, \
+                 r.confidence, r.valid_from, r.valid_to, r.tense, r.viewpoint, r.viewpoint_confidence \
+                 ORDER BY r.memory_id LIMIT {}",
+                clamp_limit(limit)
+            ),
+            vec![("user", Value::String(user.to_string()))],
+        )?;
+        rows.iter().map(row_to_tour_relation).collect()
+    }
+
+    /// ConflictsWith edges in scope, any status (review edges would
+    /// otherwise vanish under the active-only filter).
+    pub fn tour_conflicts(
+        &self,
+        user: &str,
+        project: &str,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::types::TourConflict>> {
+        let (where_, params) = self.scope_where("a", user, project, session);
+        let cypher = format!(
+            "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE {where_} \
+             RETURN a.id, b.id, CAST(c.cues AS STRING) ORDER BY a.id LIMIT {}",
+            clamp_limit(limit)
+        );
+        let rows = self.run(&cypher, Self::params_to_borrowed(&params))?;
+        rows.iter().map(row_to_tour_conflict).collect()
+    }
+
+    pub fn tour_conflicts_global(&self, user: &str, limit: usize) -> Result<Vec<crate::types::TourConflict>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (a:Memory)-[c:ConflictsWith]->(b:Memory) WHERE a.user_id = $user \
+                 RETURN a.id, b.id, CAST(c.cues AS STRING) ORDER BY a.id LIMIT {}",
+                clamp_limit(limit)
+            ),
+            vec![("user", Value::String(user.to_string()))],
+        )?;
+        rows.iter().map(row_to_tour_conflict).collect()
+    }
+
+    /// Supersedes edges in scope, any status.
+    pub fn tour_supersedes(
+        &self,
+        user: &str,
+        project: &str,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::types::TourSupersede>> {
+        let (where_, params) = self.scope_where("a", user, project, session);
+        let cypher = format!(
+            "MATCH (a:Memory)-[s:Supersedes]->(b:Memory) WHERE {where_} \
+             RETURN a.id, b.id, s.reason ORDER BY a.id LIMIT {}",
+            clamp_limit(limit)
+        );
+        let rows = self.run(&cypher, Self::params_to_borrowed(&params))?;
+        rows
+            .iter()
+            .map(|r| {
+                Ok(crate::types::TourSupersede {
+                    src: as_i64(&r[0]).unwrap_or(-1),
+                    dst: as_i64(&r[1]).unwrap_or(-1),
+                    reason: as_string(&r[2]).unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    pub fn tour_supersedes_global(&self, user: &str, limit: usize) -> Result<Vec<crate::types::TourSupersede>> {
+        let rows = self.run(
+            &format!(
+                "MATCH (a:Memory)-[s:Supersedes]->(b:Memory) WHERE a.user_id = $user \
+                 RETURN a.id, b.id, s.reason ORDER BY a.id LIMIT {}",
+                clamp_limit(limit)
+            ),
+            vec![("user", Value::String(user.to_string()))],
+        )?;
+        rows
+            .iter()
+            .map(|r| {
+                Ok(crate::types::TourSupersede {
+                    src: as_i64(&r[0]).unwrap_or(-1),
+                    dst: as_i64(&r[1]).unwrap_or(-1),
+                    reason: as_string(&r[2]).unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
     pub fn counts(&self) -> Result<(i64, i64, i64, i64)> {
         let mem: i64 = as_i64(&self.run("MATCH (m:Memory) RETURN count(m)", vec![])?[0][0])?;
         let ent: i64 = as_i64(&self.run("MATCH (e:Entity) RETURN count(e)", vec![])?[0][0])?;
@@ -1271,6 +1498,39 @@ fn as_timestamp_string(v: &Value) -> String {
         Value::String(s) => s.clone(),
         _ => String::new(),
     }
+}
+
+fn row_to_tour_relation(row: &Vec<Value>) -> Result<crate::types::TourRelation> {
+    Ok(crate::types::TourRelation {
+        src: as_string(&row[0]).unwrap_or_default(),
+        src_id: as_i64(&row[1]).unwrap_or(-1),
+        dst: as_string(&row[2]).unwrap_or_default(),
+        dst_id: as_i64(&row[3]).unwrap_or(-1),
+        relation_type: as_string(&row[4]).unwrap_or_else(|_| "coOccurs".into()),
+        memory_id: as_i64(&row[5]).unwrap_or(-1),
+        confidence: as_f64(&row[6]).unwrap_or(0.0),
+        valid_from: as_string(&row[7]).unwrap_or_default(),
+        valid_to: as_string(&row[8]).unwrap_or_default(),
+        tense: as_string(&row[9]).unwrap_or_default(),
+        viewpoint: as_string(&row[10]).unwrap_or_default(),
+        viewpoint_confidence: as_f64(&row[11]).unwrap_or(0.0),
+    })
+}
+
+fn row_to_tour_conflict(row: &Vec<Value>) -> Result<crate::types::TourConflict> {
+    let cues = match &row[2] {
+        Value::Json(JsonValue::Array(arr)) => {
+            arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+        }
+        Value::Json(other) => parse_string_list_text(&other.to_string()),
+        Value::String(s) => parse_string_list_text(s),
+        _ => vec![],
+    };
+    Ok(crate::types::TourConflict {
+        src: as_i64(&row[0]).unwrap_or(-1),
+        dst: as_i64(&row[1]).unwrap_or(-1),
+        cues,
+    })
 }
 
 fn row_to_entry(row: &Vec<Value>) -> Result<MemoryEntry> {

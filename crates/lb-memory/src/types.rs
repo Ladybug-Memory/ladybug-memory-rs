@@ -237,6 +237,65 @@ pub struct RelationSpec {
     pub allow_self: bool,
 }
 
+/// One entity with its scoped mention count, as returned by `tour`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TourEntity {
+    pub id: i64,
+    pub canonical: String,
+    pub entity_type: String,
+    pub aliases: Vec<String>,
+    pub mentions: i64,
+}
+
+/// One MentionedIn edge in the toured scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TourMention {
+    pub entity: String,
+    pub entity_id: i64,
+    pub memory_id: i64,
+    pub mention_text: String,
+    pub confidence: f64,
+}
+
+/// One RelatesTo edge whose fact is in the toured scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TourRelation {
+    pub src: String,
+    pub src_id: i64,
+    pub dst: String,
+    pub dst_id: i64,
+    pub relation_type: String,
+    pub memory_id: i64,
+    pub confidence: f64,
+    #[serde(default)]
+    pub valid_from: String,
+    #[serde(default)]
+    pub valid_to: String,
+    #[serde(default)]
+    pub tense: String,
+    #[serde(default)]
+    pub viewpoint: String,
+    #[serde(default)]
+    pub viewpoint_confidence: f64,
+}
+
+/// One ConflictsWith edge in the toured scope (any status — review
+/// edges would vanish under an active-only filter).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TourConflict {
+    pub src: i64,
+    pub dst: i64,
+    pub cues: Vec<String>,
+}
+
+/// One Supersedes edge in the toured scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TourSupersede {
+    pub src: i64,
+    pub dst: i64,
+    pub reason: String,
+}
+
 impl RelationSpec {
     pub fn new(relation_type: &str, head_types: &[&str], tail_types: &[&str]) -> Self {
         Self {
