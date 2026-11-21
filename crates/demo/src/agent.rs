@@ -169,7 +169,7 @@ fn agent_loop(cfg: AgentConfig, jobs: Receiver<ToAgent>, ans: &Sender<FromAgent>
                     session_id: None,
                     message_refs: vec![],
                     extractor: "gliner2.5".into(),
-                    model: "DanKau/gliner2.5-base-v1-onnx".into(),
+                    model: "nicolasembleton/gliner2.5-base-v1-onnx".into(),
                     auto_captured: true,
                 };
                 let pipe = Pipeline::new(&store, pipe_opts());

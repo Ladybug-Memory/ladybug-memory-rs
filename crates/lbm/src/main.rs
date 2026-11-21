@@ -468,7 +468,7 @@ fn cmd_remember(args: RememberArgs, db: Option<String>, out: Out) -> Result<()> 
             })
             .unwrap_or_default(),
         extractor: "gliner2.5".into(),
-        model: "DanKau/gliner2.5-base-v1-onnx".into(),
+        model: "nicolasembleton/gliner2.5-base-v1-onnx".into(),
         auto_captured: false,
     };
     // SQLite-first: intake -> GLiNER -> stage -> sync tick. The tick uses
