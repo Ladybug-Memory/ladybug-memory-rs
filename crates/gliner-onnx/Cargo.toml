@@ -1,7 +1,7 @@
 [package]
 name = "gliner-onnx"
 version = "0.1.0"
-description = "Native Rust inference for DanKau/gliner2.5-base-v1-onnx (GLiNER2.5 boundary architecture): entity extraction with no Python at inference time"
+description = "Native Rust inference for nicolasembleton/gliner2.5-base-v1-onnx (GLiNER2.5 boundary architecture): entity extraction with no Python at inference time"
 edition.workspace = true
 license.workspace = true
 
