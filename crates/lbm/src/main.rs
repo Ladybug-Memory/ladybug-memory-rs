@@ -193,7 +193,7 @@ struct TourArgs {
     /// Project slug (default: git root basename, else cwd slug).
     #[arg(long, value_name = "SLUG")]
     project: Option<String>,
-    /// Max entries to list.
+    /// Max entries per section to list.
     #[arg(long, default_value_t = 100)]
     limit: usize,
 }
@@ -773,12 +773,40 @@ fn cmd_tour(args: TourArgs, db: Option<String>, out: Out) -> Result<()> {
     )?;
     let store = open_store(db)?;
     let limit = args.limit.max(1);
-    let entries = match mode {
-        ScopeMode::Global => store.list_global(&scope.user_id, limit)?,
-        _ => Pipeline::new(&store, PipelineOptions::default()).tour(&scope, limit)?,
+    let session = scope.session_id.as_deref();
+    // Memories stay scope-filtered exactly as before; entities and every
+    // relationship kind are drawn from the same scope so a project tour
+    // never leaks another project's graph.
+    let (entries, entities, mentions, relations, conflicts, supersedes) = match mode {
+        ScopeMode::Global => (
+            store.list_global(&scope.user_id, limit)?,
+            store.tour_entities_global(&scope.user_id, limit)?,
+            store.tour_mentions_global(&scope.user_id, limit)?,
+            store.tour_relations_global(&scope.user_id, limit)?,
+            store.tour_conflicts_global(&scope.user_id, limit)?,
+            store.tour_supersedes_global(&scope.user_id, limit)?,
+        ),
+        _ => (
+            Pipeline::new(&store, PipelineOptions::default()).tour(&scope, limit)?,
+            store.tour_entities(&scope.user_id, &scope.project, session, limit)?,
+            store.tour_mentions(&scope.user_id, &scope.project, session, limit)?,
+            store.tour_relations(&scope.user_id, &scope.project, session, limit)?,
+            store.tour_conflicts(&scope.user_id, &scope.project, session, limit)?,
+            store.tour_supersedes(&scope.user_id, &scope.project, session, limit)?,
+        ),
     };
     if out.json {
-        print_json(&serde_json::json!({ "entries": entries }), out);
+        print_json(
+            &serde_json::json!({
+                "entries": entries,
+                "entities": entities,
+                "mentions": mentions,
+                "relationships": relations,
+                "conflicts": conflicts,
+                "supersedes": supersedes,
+            }),
+            out,
+        );
         return Ok(());
     }
     let mut current = String::new();
@@ -791,6 +819,71 @@ fn cmd_tour(args: TourArgs, db: Option<String>, out: Out) -> Result<()> {
     }
     if entries.is_empty() {
         println!("(no memories)");
+    }
+    println!("\n## entities ({})", entities.len());
+    if entities.is_empty() {
+        println!("(none)");
+    }
+    for ent in &entities {
+        let aliases = ent
+            .aliases
+            .iter()
+            .filter(|a| *a != &ent.canonical)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if aliases.is_empty() {
+            println!(
+                "- {} [{}] (#{}; {} mentions)",
+                ent.canonical, ent.entity_type, ent.id, ent.mentions
+            );
+        } else {
+            println!(
+                "- {} [{}] (#{}; aliases: {}; {} mentions)",
+                ent.canonical, ent.entity_type, ent.id, aliases, ent.mentions
+            );
+        }
+    }
+    println!("\n## relationships ({})", relations.len());
+    if relations.is_empty() {
+        println!("(none)");
+    }
+    for r in &relations {
+        println!(
+            "- {} -[{}]-> {} (memory #{}, {:.2})",
+            r.src, r.relation_type, r.dst, r.memory_id, r.confidence
+        );
+    }
+    println!("\n## mentions ({})", mentions.len());
+    if mentions.is_empty() {
+        println!("(none)");
+    }
+    for m in &mentions {
+        println!(
+            "- {} mentioned in #{} as \"{}\" [{:.2}]",
+            m.entity, m.memory_id, m.mention_text, m.confidence
+        );
+    }
+    if !conflicts.is_empty() {
+        println!("\n## conflicts ({})", conflicts.len());
+        for c in &conflicts {
+            let cues = if c.cues.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", c.cues.join("; "))
+            };
+            println!("- #{} conflicts #{} {}", c.src, c.dst, cues);
+        }
+    }
+    if !supersedes.is_empty() {
+        println!("\n## supersedes ({})", supersedes.len());
+        for s in &supersedes {
+            if s.reason.is_empty() {
+                println!("- #{} supersedes #{}", s.src, s.dst);
+            } else {
+                println!("- #{} supersedes #{} ({})", s.src, s.dst, s.reason);
+            }
+        }
     }
     Ok(())
 }
