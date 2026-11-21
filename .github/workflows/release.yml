@@ -330,7 +330,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${GITHUB_REF_NAME}" dist/lbm-*.tar.gz dist/lbm-*.zip dist/lbm-*.sha256 --clobber
+          # Each platform produces only one archive type (.tar.gz on unix,
+          # .zip on Windows) — expand globs with nullglob so the missing
+          # pattern doesn't fail the upload.
+          shopt -s nullglob
+          files=(dist/lbm-*.tar.gz dist/lbm-*.zip dist/lbm-*.sha256)
+          shopt -u nullglob
+          echo "uploading: ${files[*]}"
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
 
       - name: Upload bundle artifact (dispatch)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
@@ -364,7 +371,7 @@ jobs:
           mkdir -p dist
           gh release download "${GITHUB_REF_NAME}" --dir dist --pattern 'lbm-*'
           cp crates/lb-memory/src/rel_canon.sqlite dist/rel_canon.sqlite
-          (cd dist && sha256sum rel_canon.sqlite lbm-*.tar.gz lbm-*.zip > SHA256SUMS.txt)
+          (cd dist && sha256sum rel_canon.sqlite lbm-*.tar.gz lbm-*.zip > SHA256SUMS.txt 2>/dev/null || sha256sum rel_canon.sqlite lbm-* > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
           gh release upload "${GITHUB_REF_NAME}" dist/rel_canon.sqlite dist/SHA256SUMS.txt --clobber
 
